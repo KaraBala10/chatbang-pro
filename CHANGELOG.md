@@ -32,7 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Install (Linux amd64)
 
 ```bash
-curl -L https://github.com/KaraBala10/chatbang-pro/releases/download/v1.3.0/chatbang-pro -o chatbang-pro
+curl -L https://github.com/KaraBala10/chatbang-pro/releases/download/v1.3.0/chatbang-pro.tar.gz | tar -xz
 chmod +x chatbang-pro
 mkdir -p ~/.local/bin
 mv chatbang-pro ~/.local/bin/chatbang-pro
