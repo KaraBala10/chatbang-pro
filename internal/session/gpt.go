@@ -129,6 +129,7 @@ func waitForChatReady(ctx context.Context, chatURL string) error {
 
 	deadline := time.Now().Add(navTimeout)
 	nextNotice := time.Now().Add(8 * time.Second)
+	notifiedDialog := false
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -137,6 +138,10 @@ func waitForChatReady(ctx context.Context, chatURL string) error {
 			if err := ensureCustomGPTPage(ctx, chatURL, gptPrefix); err != nil {
 				return err
 			}
+		}
+		if dismissBlockingDialogs(ctx) && !notifiedDialog {
+			fmt.Fprintln(os.Stderr, "Dismissed ChatGPT's Too many requests dialog.")
+			notifiedDialog = true
 		}
 		var ready bool
 		err := chromedp.Run(ctx,

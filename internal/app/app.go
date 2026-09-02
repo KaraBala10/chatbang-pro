@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/user"
-	"strconv"
 	"strings"
 
 	"github.com/KaraBala10/chatbang-pro/internal/chaturl"
@@ -49,36 +48,45 @@ func Run(version string, args []string) {
 		fmt.Println("Error reading config file:", err)
 		return
 	}
-	defaultBrowser, headless := config.Parse(configFile)
-
-	if defaultBrowser == "" {
-		detectedBrowser, err := config.DetectBrowser()
-		if err != nil {
-			fmt.Println("No Chromium-based browser found in /bin, /usr/bin, or config.")
-			fmt.Println("Please install a Chromium-based browser or edit the config at", paths.File)
-			return
+	settings := config.Parse(configFile)
+	resolved, updated, err := config.ResolveBrowser(settings.Browser, usr.HomeDir)
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("Install Chromium, Chrome, Edge, or Brave, or edit the config at", paths.File)
+		return
+	}
+	profile := config.ProfileDir(usr.HomeDir, resolved, settings.Profile)
+	if updated || settings.Browser != resolved || settings.Profile != profile {
+		fmt.Fprintf(os.Stderr, "Using browser %s\n", resolved)
+		if profile != paths.Profile {
+			fmt.Fprintf(os.Stderr, "Using profile %s\n", profile)
 		}
-
-		defaultBrowser = detectedBrowser
-		defaultConfig := "browser=" + defaultBrowser + "\nheadless=" + strconv.FormatBool(headless) + "\n"
-
 		if _, err = configFile.Seek(0, io.SeekStart); err != nil {
-			fmt.Println("Error writing default config:", err)
+			fmt.Println("Error writing config file:", err)
 			return
 		}
-		if _, err = io.WriteString(configFile, defaultConfig); err != nil {
-			fmt.Println("Error writing default config:", err)
+		if err = configFile.Truncate(0); err != nil {
+			fmt.Println("Error writing config file:", err)
+			return
+		}
+		if _, err = io.WriteString(configFile, config.Format(config.Settings{
+			Browser:  resolved,
+			Headless: settings.Headless,
+			Profile:  profile,
+		})); err != nil {
+			fmt.Println("Error writing config file:", err)
 			return
 		}
 	}
+	defaultBrowser := resolved
 
-	opts = cli.Parse(args, headless)
+	opts = cli.Parse(args, settings.Headless)
 	if opts.WantConfig {
-		session.LoginProfile(defaultBrowser, paths.Profile)
+		session.Setup(defaultBrowser, profile, usr.HomeDir)
 		return
 	}
 
-	headless = opts.Headless
+	headless := opts.Headless
 	chatTarget, err := chaturl.Resolve(opts.TemporaryChat, opts.CustomGPT)
 	if err != nil {
 		log.Fatal(err)
@@ -92,7 +100,7 @@ func Run(version string, args []string) {
 
 	fmt.Fprintf(os.Stderr, "chatbang-pro %s\n", version)
 	fmt.Fprintln(os.Stderr, "Starting browser and opening ChatGPT…")
-	sess, err := session.New(defaultBrowser, paths.Profile, headless, chatTarget)
+	sess, err := session.New(defaultBrowser, profile, paths.Images, headless, chatTarget)
 	if err != nil {
 		log.Fatal(err)
 	}

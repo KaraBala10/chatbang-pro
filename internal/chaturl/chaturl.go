@@ -3,6 +3,7 @@ package chaturl
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -69,6 +70,50 @@ func IsTemporary(chatURL string) bool {
 		return false
 	}
 	return u.Query().Get("temporary-chat") == "true"
+}
+
+var conversationUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// ConversationPermalink returns a shareable chatgpt.com conversation URL
+// (https://chatgpt.com/c/{uuid} or a custom-GPT /c/ path). Empty if raw is not one.
+func ConversationPermalink(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	switch host {
+	case "chatgpt.com", "www.chatgpt.com", "chat.openai.com":
+	default:
+		return ""
+	}
+	path := strings.TrimSuffix(u.EscapedPath(), "/")
+	id := conversationIDFromPath(path)
+	if id == "" {
+		return ""
+	}
+	i := strings.LastIndex(path, "/c/")
+	if i < 0 {
+		return ""
+	}
+	return "https://chatgpt.com" + path[:i] + "/c/" + id
+}
+
+func conversationIDFromPath(path string) string {
+	const marker = "/c/"
+	i := strings.LastIndex(path, marker)
+	if i < 0 {
+		return ""
+	}
+	id := path[i+len(marker):]
+	if j := strings.IndexByte(id, '/'); j >= 0 {
+		id = id[:j]
+	}
+	id = strings.TrimSpace(id)
+	if !conversationUUID.MatchString(id) {
+		return ""
+	}
+	return strings.ToLower(id)
 }
 
 func CustomGPTPathPrefix(chatURL string) string {

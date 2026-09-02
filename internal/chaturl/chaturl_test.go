@@ -94,6 +94,27 @@ func TestIsTemporary(t *testing.T) {
 	}
 }
 
+func TestConversationPermalink(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"https://chatgpt.com/c/6a97fa21-596c-83eb-9a58-553f4c1c1f62", "https://chatgpt.com/c/6a97fa21-596c-83eb-9a58-553f4c1c1f62"},
+		{"https://chatgpt.com/c/6a97fa21-596c-83eb-9a58-553f4c1c1f62?foo=1#bar", "https://chatgpt.com/c/6a97fa21-596c-83eb-9a58-553f4c1c1f62"},
+		{"https://chatgpt.com/c/WEB:7d9287bf-9150-4d37-8e98-799a1391aed5", ""},
+		{"https://www.chatgpt.com/c/abc/", ""},
+		{"https://chat.openai.com/c/abc", ""},
+		{"https://chatgpt.com/g/g-81BdggBV3-site/c/6a97fa21-596c-83eb-9a58-553f4c1c1f62", "https://chatgpt.com/g/g-81BdggBV3-site/c/6a97fa21-596c-83eb-9a58-553f4c1c1f62"},
+		{"https://chatgpt.com/", ""},
+		{"https://chatgpt.com/?temporary-chat=true", ""},
+		{"https://example.com/c/abc", ""},
+	}
+	for _, tt := range tests {
+		if got := ConversationPermalink(tt.in); got != tt.want {
+			t.Fatalf("%q: got %q want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestCustomGPTPathPrefix(t *testing.T) {
 	got := CustomGPTPathPrefix("https://chatgpt.com/g/g-abc123-my-gpt")
 	want := "/g/g-abc123-my-gpt"

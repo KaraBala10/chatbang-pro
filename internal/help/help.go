@@ -27,7 +27,7 @@ Type a prompt at `+"`> `"+`, wait for `+"`[Thinking...]`"+`, then read the reply
 | Flag | Description |
 |------|-------------|
 | `+"`-h`"+`, `+"`--help`"+` | Show this help |
-| `+"`--config`"+` | Open ChatGPT in a visible browser to log in or refresh your session |
+| `+"`--config`"+` | Import a ChatGPT session from another browser, or log in in a visible window |
 | `+"`--headless`"+` | Force headless mode (browser runs in the background) |
 | `+"`--no-headless`"+` | Show the browser window while chatting |
 | `+"`--temporary-chat`"+`, `+"`--temp`"+` | Use [temporary chat](%s) (works with `+"`--gpt`"+` too) |
@@ -36,8 +36,8 @@ Type a prompt at `+"`> `"+`, wait for `+"`[Thinking...]`"+`, then read the reply
 
 ## First-time setup
 
-1. Install a Chromium-based browser (Chrome, Edge, Brave, etc.) under `+"`/bin`"+` or `+"`/usr/bin`"+`.
-2. Run `+"`chatbang-pro --config`"+` — log in to ChatGPT, then press **Enter** in the terminal.
+1. Install a Chromium-based browser (Chromium, Chrome, Edge, Brave, etc.) under `+"`/bin`"+`, `+"`/usr/bin`"+`, or `+"`~/.local/bin`"+`.
+2. Run `+"`chatbang-pro --config`"+` — pick a browser that's already logged in to ChatGPT, or log in manually, then press **Enter**.
 3. Start chatting: `+"`chatbang-pro`"+`
 
 ## Configuration file
@@ -45,14 +45,16 @@ Type a prompt at `+"`> `"+`, wait for `+"`[Thinking...]`"+`, then read the reply
 Path: `+"`%s`"+`
 
 `+"```"+`
-browser=/usr/bin/google-chrome
+browser=/usr/bin/chromium-browser
 headless=true
+profile=/home/you/chatbang/profile_data
 `+"```"+`
 
 | Key | Description |
 |-----|-------------|
 | `+"`browser`"+` | Path to your Chromium-based browser executable |
 | `+"`headless`"+` | `+"`true`"+` (default) hides the browser; `+"`false`"+` shows it |
+| `+"`profile`"+` | Chromium user-data dir (Snap Chromium needs a non-hidden path such as `+"`~/chatbang/profile_data`"+`) |
 
 CLI flags override `+"`headless`"+` for that run only.
 
@@ -68,7 +70,7 @@ chatbang-pro --gpt https://chatgpt.com/g/g-xxx --temp
 chatbang-pro -g g-81BdggBV3-website-mobile-app-builder-ui-ux-web-design
 chatbang-pro --gpt https://chatgpt.com/g/g-xxx --message "كيفك"
 chatbang-pro -m "What is 2+2?"
-chatbang-pro --config                 # log in / refresh browser profile
+chatbang-pro --config                 # import session from another browser, or log in
 `+"```"+`
 
 ## Tips

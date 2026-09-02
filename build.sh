@@ -7,6 +7,7 @@ cd "$ROOT"
 
 OUTPUT="${OUTPUT:-chatbang-pro}"
 INSTALL_DIR="${INSTALL_DIR:-}"
+USER_BIN="${USER_BIN:-${HOME}/.local/bin}"
 
 # Prefer user-local Go, then standard install paths, then PATH.
 for candidate in \
@@ -42,16 +43,22 @@ go build -ldflags "${LDFLAGS}" -o "${OUTPUT}" "${BUILD_PKG}"
 chmod +x "${OUTPUT}"
 go vet ./...
 
+echo "==> done:       ${ROOT}/${OUTPUT}"
+
 if [[ -n "${INSTALL_DIR}" ]]; then
 	mkdir -p "${INSTALL_DIR}"
 	install -m 755 "${OUTPUT}" "${INSTALL_DIR}/${OUTPUT}"
 	echo "==> installed:  ${INSTALL_DIR}/${OUTPUT}"
 fi
 
-if [[ "${SKIP_SYSTEM_INSTALL:-}" != "1" ]]; then
+if [[ "${SKIP_INSTALL:-}" != "1" ]]; then
+	mkdir -p "${USER_BIN}"
+	install -m 755 "${OUTPUT}" "${USER_BIN}/${OUTPUT}"
+	echo "==> installed:  ${USER_BIN}/${OUTPUT}"
+fi
+
+if [[ "${SYSTEM_INSTALL:-}" == "1" ]]; then
 	echo "==> installing to /usr/bin/chatbang-pro (sudo)…"
 	sudo cp -f "${OUTPUT}" /usr/bin/chatbang-pro
 	echo "==> installed:  /usr/bin/chatbang-pro"
-else
-	echo "==> done:       ${ROOT}/${OUTPUT}"
 fi
