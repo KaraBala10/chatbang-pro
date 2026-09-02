@@ -1,53 +1,57 @@
-# ⚡ Chatbang Pro
-
-> **ChatGPT from your terminal** — the full web experience. No API key. No quotas. No limits.
-
-Chatbang Pro automates the official [ChatGPT](https://chatgpt.com) app in Chrome — every model, custom GPT, image generation, and feature OpenAI ships, from a fast, scriptable CLI.
-
-| | |
-|:---:|:---:|
-| 🔑 **No API key** | 🆓 **No quotas** |
-| 🧠 **Full ChatGPT** | ⚡ **Terminal-native** |
-| 🖼️ **Image generation** | 🌍 **Unicode & RTL** |
-
-Enhanced, actively maintained fork of [chatbang](https://github.com/ahmedhosssam/chatbang) — built for power users who want reliability, long replies, and headless operation.
+<div align="center">
+  <h1>chatbang-pro</h1>
+  <p>
+    ChatGPT from the terminal.<br />
+    No API key. Drives the ChatGPT web app in Chromium, including custom GPTs and image generation.
+  </p>
+  <p>
+    <a href="https://github.com/KaraBala10/chatbang-pro/releases/latest"><img src="https://img.shields.io/github/v/release/KaraBala10/chatbang-pro?style=for-the-badge&logo=github&label=latest%20release" alt="Latest release" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-a3e635?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="MIT License" /></a>
+    <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-E05735?style=for-the-badge&logo=keepachangelog&logoColor=white" alt="Changelog" /></a>
+    <a href="https://semver.org/spec/v2.0.0.html"><img src="https://img.shields.io/badge/versioning-SemVer-3F9FD7?style=for-the-badge&logo=semver&logoColor=white" alt="Semantic Versioning" /></a>
+    <img src="https://img.shields.io/badge/platform-Linux-111827?style=for-the-badge&logo=linux&logoColor=white" alt="Linux" />
+  </p>
+</div>
 
 ---
 
-## 📦 Installation
+## Table of contents
 
-Download and install from the **[Releases](https://github.com/KaraBala10/chatbang-pro/releases)** page.
+- [Install](#install)
+- [Setup](#setup)
+- [Usage](#usage)
+- [Output](#output)
+- [How it works](#how-it-works)
+- [Config](#config)
+- [Versions](#versions)
+- [Limits](#limits)
+- [License](#license)
+- [Build from source](#build-from-source)
 
-From source:
+## Install
+
+Download a ready binary from the latest GitHub Release. You do not need Go, and you do not need to clone this repository.
+
+**[Latest release](https://github.com/KaraBala10/chatbang-pro/releases/latest)** (always the current version)
+
+On that page, under **Assets**, download `chatbang-pro.tar.gz`. You need a Chromium-based browser (Google Chrome, Chromium, Edge, Brave, and similar) and a ChatGPT login.
 
 ```bash
-git clone https://github.com/KaraBala10/chatbang-pro.git
-cd chatbang-pro
-./build.sh
+curl -fL https://github.com/KaraBala10/chatbang-pro/releases/latest/download/chatbang-pro.tar.gz | tar -xz
+chmod +x chatbang-pro
+mkdir -p ~/.local/bin
+mv chatbang-pro ~/.local/bin/chatbang-pro
 ```
 
-`./build.sh` installs to `~/.local/bin/chatbang-pro`. Use `SYSTEM_INSTALL=1 ./build.sh` to also copy into `/usr/bin`.
-
-## 🌐 Requirements
-
-A Chromium-based browser (Google Chrome, Chromium, Edge, Brave, etc.). On Debian/Ubuntu amd64, Google Chrome:
-
-```bash
-curl -fL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-  -o /tmp/google-chrome-stable_current_amd64.deb
-
-sudo apt install /tmp/google-chrome-stable_current_amd64.deb
-```
-
-Ubuntu Snap Chromium works; its profile must be a non-hidden folder such as `~/chatbang/profile_data`.
-
-## ⚙️ Setup
+Make sure `~/.local/bin` is on your `PATH`. Then run setup once:
 
 ```bash
 chatbang-pro --config
 ```
 
-Pick a browser that's already logged in to ChatGPT to import that session, or log in in the visible window and press **Enter**.
+## Setup
+
+`--config` lists browsers with saved profiles. Pick one that is already logged in to ChatGPT to import that session, or log in in the visible window and press Enter.
 
 Optional config at `$HOME/.config/chatbang/chatbang`:
 
@@ -57,22 +61,117 @@ headless=true
 profile=/home/you/chatbang/profile_data
 ```
 
-## 💬 Usage
+| Key | Description |
+| --- | --- |
+| `browser` | Path to the Chromium-based executable |
+| `headless` | `true` (default) hides the browser; `false` shows it |
+| `profile` | Chromium user-data dir. Snap Chromium cannot use a hidden path; use `~/chatbang/profile_data` |
+
+`--headless` and `--no-headless` override `headless` for that run only.
+
+## Usage
 
 ```bash
-chatbang-pro              # 🚀 start chat
-chatbang-pro --config     # 🔐 import login / refresh
-chatbang-pro -g g-XXXX    # 🎯 custom GPT (full URL or g-... id)
-chatbang-pro -m "hello"   # 📜 one prompt, then exit
-chatbang-pro --help       # 📖 full CLI reference (-h)
+chatbang-pro --help
 ```
 
-Replies are wrapped in a `<<<chatbang-pro` … `>>>` block. Generated images are saved under `~/chatbang/images` and listed as `[image] path`. After the first reply, the conversation URL is printed as `Conversation: https://chatgpt.com/c/…`.
+```bash
+chatbang-pro
+chatbang-pro --no-headless
+chatbang-pro --config
+chatbang-pro -m "What is 2+2?"
+chatbang-pro -g g-XXXX
+chatbang-pro --gpt https://chatgpt.com/g/g-xxxx --temp
+```
 
-Type `exit` or `quit` to leave. Run `chatbang-pro --help` for all flags and options.
+Type a prompt at `>`. Empty lines are ignored. Type `exit` or `quit` to leave.
 
----
+| Flag | Description |
+| --- | --- |
+| `-h`, `--help` | Show help |
+| `--config` | Import a ChatGPT session from another browser, or log in in a visible window |
+| `--headless` | Run the browser in the background |
+| `--no-headless` | Show the browser window |
+| `--temporary-chat`, `--temp` | Temporary chat ([chatgpt.com/?temporary-chat=true](https://chatgpt.com/?temporary-chat=true)); works with `--gpt` |
+| `--gpt`, `--custom-gpt`, `-g` | Custom GPT: full URL, `/g/g-...` path, or `g-...` id |
+| `--message`, `-m` | Send one prompt, print the reply, and exit |
 
-<p align="center">
-  <strong>Built for the terminal. Powered by ChatGPT.</strong> 🖥️✨
-</p>
+## Output
+
+Interactive and `-m` replies are wrapped in a block:
+
+```text
+<<<chatbang-pro
+reply text
+[image] /home/you/chatbang/images/20260902-153455-e640168b.png
+>>>
+Conversation: https://chatgpt.com/c/6a9817b0-ab18-83eb-b8ca-a0d4673c0f4b
+```
+
+On a TTY, the text inside the block is rendered as terminal markdown. When stdout is a pipe, the block keeps the raw markdown so scripts can parse it.
+
+| Stream | Content |
+| --- | --- |
+| stdout | Reply block (`<<<chatbang-pro` … `>>>`) |
+| stderr | Status (`[Thinking...]`, `[Generating image...]`, `Saved image:`, `Conversation:`) |
+
+Generated images are written under `~/chatbang/images`. `[image] path` lines are listed in the reply and are not run through the markdown renderer.
+
+## How it works
+
+Chatbang Pro automates a real Chromium tab with [chromedp](https://github.com/chromedp/chromedp). It does not call the OpenAI API.
+
+1. Opens [chatgpt.com](https://chatgpt.com) with a dedicated profile.
+2. Fills the composer (Unicode and RTL work) and sends the prompt.
+3. Waits until streaming finishes, or until an image-generation widget is done.
+4. Reads the assistant reply from ChatGPT's Copy action (it does not write the OS clipboard). Falls back to the page DOM if Copy is unavailable.
+5. Prints the reply block. Image files are saved under `~/chatbang/images`.
+
+After the first reply it prints `Conversation:` plus the `https://chatgpt.com/c/{uuid}` URL. Follow-up prompts stay on that conversation; the page is not reloaded on every turn.
+
+## Config
+
+| Path | Purpose |
+| --- | --- |
+| `~/.config/chatbang/chatbang` | Browser path, headless flag, profile dir |
+| `~/chatbang/profile_data` | Chromium user-data dir used with Snap Chromium |
+| `~/chatbang/images` | Saved generated images |
+
+`--config` can copy ChatGPT cookies from an installed Chromium or Firefox profile into Chatbang's profile.
+
+## Versions
+
+This project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). User-facing changes are listed in [`CHANGELOG.md`](CHANGELOG.md) using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+| Resource | Link |
+| --- | --- |
+| Latest release | [releases/latest](https://github.com/KaraBala10/chatbang-pro/releases/latest) |
+| All releases | [releases](https://github.com/KaraBala10/chatbang-pro/releases) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+| License | [LICENSE](LICENSE) (MIT, 2026) |
+| Upstream | [ahmedhosssam/chatbang](https://github.com/ahmedhosssam/chatbang) |
+
+## Limits
+
+- Unofficial automation of chatgpt.com. OpenAI can change the page, throttle, or block it.
+- Needs a local Chromium-based browser and a ChatGPT account. There is no API key, and no official API.
+- A reply can take up to 15 minutes. After a very large reply (more than 6000 characters) the next prompt starts a fresh chat.
+- Snap Chromium cannot keep its profile under a hidden directory such as `~/.config/...`.
+
+## License
+
+[MIT](LICENSE) © 2026 [KaraBala](https://github.com/KaraBala10)
+
+## Build from source
+
+Only needed if you are changing the code. Users should install from the [latest release](https://github.com/KaraBala10/chatbang-pro/releases/latest).
+
+Requires [Go 1.26+](https://go.dev/dl/).
+
+```bash
+git clone https://github.com/KaraBala10/chatbang-pro.git
+cd chatbang-pro
+./build.sh
+```
+
+`./build.sh` installs to `~/.local/bin/chatbang-pro`. Set `SYSTEM_INSTALL=1` to also copy into `/usr/bin`. Set `SKIP_INSTALL=1` to build in the repo only.
