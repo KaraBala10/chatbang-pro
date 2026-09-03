@@ -78,7 +78,7 @@ func TestLiveImageGen(t *testing.T) {
 	if browser == "" || profile == "" || images == "" {
 		t.Fatal("CHATBANG_LIVE_BROWSER, CHATBANG_LIVE_PROFILE, and CHATBANG_LIVE_IMAGES are required")
 	}
-	sess, err := New(browser, profile, images, true, "https://chatgpt.com")
+	sess, err := New(browser, profile, images, t.TempDir(), true, "https://chatgpt.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +110,18 @@ func TestVisibleAssistantText(t *testing.T) {
 	got := visibleAssistantText("Stopping thinking\n\nI'm doing well, thanks for asking!\nChatGPT said:\nEdit")
 	if got != "I'm doing well, thanks for asking!" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestKeepFullerText(t *testing.T) {
+	if got := keepFullerText("Hello", "Hello!\nHow can I help?"); got != "Hello!\nHow can I help?" {
+		t.Fatalf("copied text should win when longer, got %q", got)
+	}
+	if got := keepFullerText("Hello there", ""); got != "Hello there" {
+		t.Fatalf("primary should stay when copied is empty, got %q", got)
+	}
+	if got := keepFullerText("Thinking", "Done."); got != "Done." {
+		t.Fatalf("copied should replace chrome-only primary, got %q", got)
 	}
 }
 
@@ -166,7 +178,7 @@ func TestImageOpenCommand(t *testing.T) {
 }
 
 func TestFormatTurnImageOnly(t *testing.T) {
-	out, err := formatTurn("", []savedImage{{Path: "/tmp/cat.png"}})
+	out, err := formatTurn("", []savedImage{{Path: "/tmp/cat.png"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

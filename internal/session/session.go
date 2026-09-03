@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
@@ -19,6 +21,8 @@ import (
 	"github.com/KaraBala10/chatbang-pro/internal/chaturl"
 	"github.com/KaraBala10/chatbang-pro/internal/config"
 )
+
+var errStopped = errors.New("generation stopped")
 
 // Session drives a Chromium tab for one ChatGPT conversation target.
 type Session struct {
@@ -29,7 +33,7 @@ type Session struct {
 	chatURL     string
 	profileDir  string
 	imagesDir   string
-	lastPeak    int
+	filesDir    string
 	statusLine  string
 	shownChat   bool
 	knownChats  map[string]bool
@@ -38,7 +42,7 @@ type Session struct {
 }
 
 // New opens a browser session and waits until the chat page is ready.
-func New(browser, profileDir, imagesDir string, headless bool, chatTarget string) (*Session, error) {
+func New(browser, profileDir, imagesDir, filesDir string, headless bool, chatTarget string) (*Session, error) {
 	if err := config.PrepareProfile(profileDir); err != nil {
 		return nil, err
 	}
@@ -46,7 +50,7 @@ func New(browser, profileDir, imagesDir string, headless bool, chatTarget string
 		context.Background(),
 		config.AllocatorOptions(browser, profileDir, headless)...,
 	)
-	s := &Session{allocCtx: allocCtx, allocCancel: allocCancel, chatURL: chatTarget, profileDir: profileDir, imagesDir: imagesDir, knownChats: map[string]bool{}}
+	s := &Session{allocCtx: allocCtx, allocCancel: allocCancel, chatURL: chatTarget, profileDir: profileDir, imagesDir: imagesDir, filesDir: filesDir, knownChats: map[string]bool{}}
 	if err := s.openTab(); err != nil {
 		stopBrowser(s.ctx, s.ctxCancel, allocCancel, profileDir)
 		return nil, err
@@ -65,15 +69,19 @@ func (s *Session) Close() {
 func (s *Session) RunTurn(prompt string) {
 	fmt.Fprintln(os.Stderr, "[Thinking...]")
 
-	if err := s.prepareForPrompt(); err != nil {
-		fatalChatErr(err)
-	}
 	if err := ensureCustomGPTPage(s.ctx, s.chatURL, chaturl.CustomGPTPathPrefix(s.chatURL)); err != nil {
 		fatalChatErr(err)
 	}
 
-	result, peak, err := s.runTurn(prompt)
-	s.lastPeak = peak
+	result, _, err := s.runTurn(prompt)
+	if errors.Is(err, errStopped) {
+		s.afterStop()
+		if len(result) > 0 {
+			fmt.Print(formatReplyBlock(string(result)))
+		}
+		s.announceConversationURL()
+		return
+	}
 	if err != nil {
 		if sendFailed(err) {
 			fmt.Fprintln(os.Stderr, err)
@@ -97,8 +105,11 @@ func sendFailed(err error) bool {
 }
 
 func (s *Session) runTurn(prompt string) ([]byte, int, error) {
+	stop, cancel := watchInterrupt(s.ctx)
+	defer cancel()
+
 	baseline, _ := evaluateResponseStatus(s.ctx)
-	turn, captured, err := s.submitAndCapture(prompt, baseline)
+	turn, captured, err := s.submitAndCapture(prompt, baseline, stop)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -109,17 +120,28 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 		text = turn.Text
 		peak = max(len(turn.Text), 1)
 	} else {
-		raw, p, waitErr := waitForResponse(s.ctx, looksLikeImagePrompt(prompt), baseline, &s.statusLine)
+		raw, p, waitErr := waitForResponse(s.ctx, looksLikeImagePrompt(prompt), baseline, &s.statusLine, stop)
 		peak = p
 		text = string(raw)
 		err = waitErr
 	}
+	if errors.Is(err, errStopped) {
+		text = visibleAssistantText(text)
+		if grabbed := grabStoppedText(s.ctx, text); grabbed != "" {
+			text = grabbed
+		}
+		if copied := copyAssistantReply(s.ctx); copied != "" {
+			text = keepFullerText(text, copied)
+		}
+		out, ferr := formatTurn(text, nil, nil)
+		if ferr != nil {
+			return nil, peak, errStopped
+		}
+		return out, max(peak, len(text), 1), errStopped
+	}
 	if !isImageGenFailureText(text) {
 		if copied := copyAssistantReply(s.ctx); copied != "" {
-			vis := visibleAssistantText(copied)
-			if vis != "" {
-				text = vis
-			}
+			text = keepFullerText(text, copied)
 		}
 	}
 	after, _ := readResponseStatus(s.ctx, baseline)
@@ -137,10 +159,14 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 		pt.HasImage = true
 		images = s.collectImages(pt)
 	}
-	if err != nil && len(images) == 0 {
+	if link := s.conversationURL(); link != "" {
+		s.convURL = link
+	}
+	files := s.collectFiles(turn, text)
+	if err != nil && len(images) == 0 && len(files) == 0 {
 		return nil, peak, err
 	}
-	out, ferr := formatTurn(text, images)
+	out, ferr := formatTurn(text, images, files)
 	if ferr != nil {
 		if err != nil {
 			return nil, peak, err
@@ -153,7 +179,7 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 	return out, max(peak, len(text), 1), nil
 }
 
-func (s *Session) submitAndCapture(prompt string, baseline responseStatus) (parsedTurn, bool, error) {
+func (s *Session) submitAndCapture(prompt string, baseline responseStatus, stop <-chan struct{}) (parsedTurn, bool, error) {
 	if err := s.ensureComposerReady(); err != nil {
 		return parsedTurn{}, false, err
 	}
@@ -175,13 +201,16 @@ func (s *Session) submitAndCapture(prompt string, baseline responseStatus) (pars
 	if err != nil {
 		return parsedTurn{}, false, fmt.Errorf("submit prompt: %w", err)
 	}
+	if interrupted(stop) {
+		return parsedTurn{}, false, nil
+	}
 	if looksLikeImagePrompt(prompt) {
 		nudgeImageGeneration(s.ctx)
 	}
 	if pending == nil {
 		return parsedTurn{}, false, nil
 	}
-	turn, ok := s.capture.wait(s.ctx, pending, baseline, &s.statusLine, looksLikeImagePrompt(prompt))
+	turn, ok := s.capture.wait(s.ctx, pending, baseline, &s.statusLine, looksLikeImagePrompt(prompt), stop)
 	return turn, ok, nil
 }
 
@@ -362,6 +391,13 @@ func (s *Session) openTab() error {
 	if err := chromedp.Run(s.ctx, enableNetwork(), enableCopyHook(), chromedp.Navigate(s.chatURL)); err != nil {
 		return err
 	}
+	if s.filesDir != "" {
+		_ = chromedp.Run(s.ctx,
+			browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllow).
+				WithDownloadPath(s.filesDir).
+				WithEventsEnabled(false),
+		)
+	}
 	fmt.Fprintln(os.Stderr, "Waiting for chat to start…")
 	if err := waitForChatReady(s.ctx, s.chatURL); err != nil {
 		return err
@@ -380,6 +416,19 @@ func (s *Session) recover() error {
 		return fmt.Errorf("could not reconnect browser: %w", err)
 	}
 	return nil
+}
+
+func (s *Session) afterStop() {
+	var alive bool
+	err := chromedp.Run(s.ctx, chromedp.Evaluate(`true`, &alive))
+	if err != nil || isSessionDead(err) {
+		if recErr := s.recover(); recErr != nil {
+			fmt.Fprintln(os.Stderr, recErr)
+			return
+		}
+	}
+	_ = dismissStaleStop(s.ctx)
+	_ = waitComposerAccepts(s.ctx, composerIdleWait)
 }
 
 func (s *Session) announceConversationURL() {
@@ -452,20 +501,6 @@ func pageConversationIDs(ctx context.Context) []string {
 	var ids []string
 	_ = chromedp.Run(ctx, chromedp.Evaluate(js, &ids))
 	return ids
-}
-
-func (s *Session) prepareForPrompt() error {
-	if s.lastPeak <= largeResponseThreshold {
-		return nil
-	}
-	fmt.Fprintln(os.Stderr, "Starting a fresh chat (last reply was large)...")
-	s.lastPeak = 0
-	s.shownChat = false
-	s.convURL = ""
-	if err := chromedp.Run(s.ctx, chromedp.Navigate(s.chatURL)); err != nil {
-		return err
-	}
-	return waitForChatReady(s.ctx, s.chatURL)
 }
 
 func (s *Session) conversationTarget() string {
@@ -639,6 +674,54 @@ func dismissStaleStop(ctx context.Context) error {
 	}
 	_ = waitComposerAccepts(ctx, composerIdleWait)
 	return nil
+}
+
+func clickStopGenerating(ctx context.Context) {
+	js := `(() => {
+		` + jsComposer + `
+		const labeled = document.querySelector('[data-testid="stop-button"]');
+		if (labeled && !labeled.disabled && labeled.getAttribute('aria-disabled') !== 'true') {
+			labeled.click();
+			return true;
+		}
+		const b = composerButton();
+		if (isStopControl(b)) {
+			b.click();
+			return true;
+		}
+		return false;
+	})()`
+	_ = chromedp.Run(ctx, chromedp.Evaluate(js, nil))
+}
+
+func watchInterrupt(ctx context.Context) (<-chan struct{}, context.CancelFunc) {
+	arm, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		defer signal.Stop(sigs)
+		select {
+		case <-sigs:
+			fmt.Fprintln(os.Stderr, "[Stopping...]")
+			clickStopGenerating(ctx)
+			close(stopped)
+		case <-arm.Done():
+		}
+	}()
+	return stopped, cancel
+}
+
+func interrupted(stop <-chan struct{}) bool {
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 func waitForSendButton(ctx context.Context, timeout time.Duration) error {

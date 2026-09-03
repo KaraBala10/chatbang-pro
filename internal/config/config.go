@@ -48,6 +48,7 @@ type Paths struct {
 	File    string
 	Profile string
 	Images  string
+	Files   string
 }
 
 // PathsForHome returns standard chatbang config paths for a home directory.
@@ -58,6 +59,7 @@ func PathsForHome(homeDir string) Paths {
 		File:    filepath.Join(dir, "chatbang"),
 		Profile: filepath.Join(dir, "profile_data"),
 		Images:  filepath.Join(homeDir, "chatbang", "images"),
+		Files:   filepath.Join(homeDir, "chatbang", "files"),
 	}
 }
 
@@ -65,6 +67,7 @@ func AllocatorOptions(browserPath, profileDir string, headless bool) []chromedp.
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		ExecPathOptions(browserPath)...,
 	)
+	opts = append(opts, BrowserProcessOptions()...)
 	opts = append(opts,
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("exclude-switches", "enable-automation"),
@@ -78,6 +81,7 @@ func AllocatorOptions(browserPath, profileDir string, headless bool) []chromedp.
 		chromedp.Flag("disable-background-timer-throttling", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-features", "DownloadBubble,DownloadBubbleV2"),
 		chromedp.UserDataDir(profileDir),
 		chromedp.Flag("profile-directory", "Default"),
 	)

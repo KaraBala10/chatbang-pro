@@ -100,7 +100,7 @@ func Run(version string, args []string) {
 
 	fmt.Fprintf(os.Stderr, "chatbang-pro %s\n", version)
 	fmt.Fprintln(os.Stderr, "Starting browser and opening ChatGPT…")
-	sess, err := session.New(defaultBrowser, profile, paths.Images, headless, chatTarget)
+	sess, err := session.New(defaultBrowser, profile, paths.Images, paths.Files, headless, chatTarget)
 	if err != nil {
 		log.Fatal(err)
 	}

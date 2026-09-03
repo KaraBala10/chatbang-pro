@@ -17,6 +17,7 @@ type responseStatus struct {
 	ImageGenerating bool   `json:"imageGenerating"`
 	ImagePending    bool   `json:"imagePending"`
 	ImageFailed     bool   `json:"imageFailed"`
+	CopyReady       bool   `json:"copyReady"`
 	LastImage       string `json:"lastImage"`
 	StatusLine      string `json:"statusLine"`
 	Len             int    `json:"len"`
@@ -68,25 +69,28 @@ func evaluateResponseStatus(ctx context.Context) (responseStatus, error) {
 		const pending = imagePending || waitingOnImageFollowUp;
 		const hasImage = !blockedMsg && (finished || imgs.length > 0);
 		const streaming = isStillStreaming(last) || isStillStreaming(root) || !!streamingNode;
+		const copyReady = hasTurnCopyButton(last) || hasTurnCopyButton(root);
+		const thinking = isTurnThinking(last) || isTurnThinking(root);
 		const statusLine = pending ? (imageGenStatusLine(root) || "Generating image...") : "";
 		const rawTc = assistantTextWithoutImageGen(last);
 		const chrome = !blockedMsg && isReplyChrome(rawTc);
 		const tc = chrome ? "" : rawTc;
 		const len = tc.length;
 		if (blockedMsg) {
-			return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, lastImage: lastImage, statusLine: "", imageCount: 0, len: Math.max(blockedMsg.length, 1), tail: blockedMsg, nodeCount: nodes.length, userCount: userCount};
+			return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, copyReady: copyReady, lastImage: lastImage, statusLine: "", imageCount: 0, len: Math.max(blockedMsg.length, 1), tail: blockedMsg, nodeCount: nodes.length, userCount: userCount};
 		}
 		if (finished && !pending) {
-			return {generating: false, hasImage: true, imageGenerating: false, imagePending: false, lastImage: lastImage, statusLine: "", imageCount: Math.max(imgs.length, 1), len: Math.max(len, 1), tail: tc.substring(Math.max(0, len - 400)), nodeCount: nodes.length, userCount: userCount};
+			return {generating: false, hasImage: true, imageGenerating: false, imagePending: false, copyReady: copyReady, lastImage: lastImage, statusLine: "", imageCount: Math.max(imgs.length, 1), len: Math.max(len, 1), tail: tc.substring(Math.max(0, len - 400)), nodeCount: nodes.length, userCount: userCount};
 		}
-		const stillWriting = streaming || imagePending || waitingOnImageFollowUp || chrome;
+		const awaitingCopy = len > 0 && !copyReady && !hasImage;
+		const stillWriting = streaming || imagePending || waitingOnImageFollowUp || chrome || stop || thinking || awaitingCopy;
 		if (stillWriting || pending || (stop && !len && !hasImage)) {
-			return {generating: true, hasImage: hasImage, imageGenerating: pending, imagePending: imagePending, lastImage: lastImage, statusLine: statusLine || (chrome ? "Thinking..." : ""), imageCount: imgs.length, nodeCount: nodes.length, userCount: userCount};
+			return {generating: true, hasImage: hasImage, imageGenerating: pending, imagePending: imagePending, copyReady: copyReady, lastImage: lastImage, statusLine: statusLine || (chrome || thinking ? "Thinking..." : ""), imageCount: imgs.length, nodeCount: nodes.length, userCount: userCount};
 		}
 		if (!len && !hasImage) {
-			return {generating: true, imageGenerating: false, imagePending: imagePending, lastImage: lastImage, statusLine: statusLine, nodeCount: nodes.length, userCount: userCount, imageCount: 0};
+			return {generating: true, imageGenerating: false, imagePending: imagePending, copyReady: copyReady, lastImage: lastImage, statusLine: statusLine, nodeCount: nodes.length, userCount: userCount, imageCount: 0};
 		}
-		return {generating: false, hasImage: hasImage, imageGenerating: false, imagePending: imagePending, lastImage: lastImage, statusLine: "", imageCount: hasImage ? Math.max(imgs.length, 1) : imgs.length, len: hasImage ? Math.max(len, 1) : len, tail: tc.substring(Math.max(0, len - 400)), nodeCount: nodes.length, userCount: userCount};
+		return {generating: false, hasImage: hasImage, imageGenerating: false, imagePending: imagePending, copyReady: copyReady, lastImage: lastImage, statusLine: "", imageCount: hasImage ? Math.max(imgs.length, 1) : imgs.length, len: hasImage ? Math.max(len, 1) : len, tail: tc.substring(Math.max(0, len - 400)), nodeCount: nodes.length, userCount: userCount};
 	})()`
 
 	var status responseStatus
@@ -246,6 +250,23 @@ func statusKey(line string) string {
 	return strings.TrimRight(s, ".…")
 }
 
+func waitingForCopy(status responseStatus) bool {
+	if imageGenFailed(status) || status.HasImage || status.ImageCount > 0 {
+		return false
+	}
+	return !status.CopyReady
+}
+
+func streamCaptureReady(status responseStatus) bool {
+	if imageGenFailed(status) {
+		return true
+	}
+	if status.Generating || status.ImageGenerating || status.ImagePending || waitingForCopy(status) {
+		return false
+	}
+	return status.Len > 0 || status.HasImage || status.ImageCount > 0
+}
+
 func replyFinished(baseline, status responseStatus) bool {
 	if imageGenFailed(status) {
 		return true
@@ -258,6 +279,9 @@ func replyFinished(baseline, status responseStatus) bool {
 	}
 	if newImageThisTurn(baseline, status) {
 		return true
+	}
+	if waitingForCopy(status) {
+		return false
 	}
 	return responseAlreadyComplete(baseline, status, false)
 }
@@ -313,8 +337,40 @@ func grabFinishedReply(ctx context.Context, baseline, status responseStatus, ima
 	return nil, 0, false, nil
 }
 
-func waitForResponse(ctx context.Context, expectImage bool, baseline responseStatus, lastStatus *string) ([]byte, int, error) {
-	deadline := time.Now().Add(responseTimeout)
+func grabStoppedText(ctx context.Context, lastPartial string) string {
+	deadline := time.Now().Add(800 * time.Millisecond)
+	best := visibleAssistantText(lastPartial)
+	for {
+		text, err := fetchFullResponse(ctx)
+		if err == nil {
+			if vis := visibleAssistantText(text); vis != "" && len(vis) >= len(best) {
+				best = vis
+			}
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return best
+}
+
+func waitOrStop(d time.Duration, stop <-chan struct{}) bool {
+	if stop == nil {
+		time.Sleep(d)
+		return false
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-stop:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+func waitForResponse(ctx context.Context, expectImage bool, baseline responseStatus, lastStatus *string, stop <-chan struct{}) ([]byte, int, error) {
 	waitStart := time.Now()
 
 	if lastStatus == nil {
@@ -337,6 +393,18 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 		fmt.Fprintln(os.Stderr, warn)
 		out, err := renderResponse(lastPartial)
 		return out, max(peakLen, len(lastPartial)), err
+	}
+
+	returnStopped := func() ([]byte, int, error) {
+		vis := grabStoppedText(ctx, lastPartial)
+		if vis == "" {
+			return nil, peakLen, errStopped
+		}
+		out, err := renderResponse(vis)
+		if err != nil {
+			return nil, peakLen, errStopped
+		}
+		return out, max(peakLen, len(vis)), errStopped
 	}
 
 	imageMode := expectImage
@@ -364,7 +432,10 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 		return false
 	}
 
-	for time.Now().Before(deadline) {
+	for {
+		if interrupted(stop) {
+			return returnStopped()
+		}
 		if ctx.Err() != nil {
 			return returnPartial("Warning: browser disconnected; showing last captured text.")
 		}
@@ -374,7 +445,9 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 			if ctx.Err() != nil {
 				return returnPartial("Warning: browser disconnected; showing last captured text.")
 			}
-			time.Sleep(pollIntervalDone)
+			if waitOrStop(pollIntervalDone, stop) {
+				return returnStopped()
+			}
 			continue
 		}
 		if dismissBlockingDialogs(ctx) && !dismissedDialog {
@@ -393,7 +466,9 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 		}
 		if replyFinished(baseline, status) && !imageMode {
 			stableCount = 0
-			time.Sleep(pollIntervalActive)
+			if waitOrStop(pollIntervalActive, stop) {
+				return returnStopped()
+			}
 			continue
 		}
 
@@ -405,12 +480,14 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 				if time.Since(waitStart) > startWaitTimeout {
 					return nil, peakLen, fmt.Errorf("ChatGPT did not start a reply; try sending again")
 				}
-				time.Sleep(pollIntervalDone)
+				if waitOrStop(pollIntervalDone, stop) {
+					return returnStopped()
+				}
 				continue
 			}
 		}
 
-		if status.Generating {
+		if status.Generating || waitingForCopy(status) {
 			stableCount = 0
 			pollSleep = pollIntervalActive
 		} else if imageMode && !newImageThisTurn(baseline, status) {
@@ -423,7 +500,9 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 		} else if started {
 			if imageMode && !newImageThisTurn(baseline, status) {
 				stableCount = 0
-				time.Sleep(pollIntervalActive)
+				if waitOrStop(pollIntervalActive, stop) {
+					return returnStopped()
+				}
 				continue
 			}
 			stableNeeded, confirmWait := completionThresholds(peakLen)
@@ -444,12 +523,23 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 						if len(text) > len(lastPartial) {
 							lastPartial = text
 						}
-						time.Sleep(pollIntervalDone)
+						if waitOrStop(pollIntervalDone, stop) {
+							return returnStopped()
+						}
 						continue
 					}
 					if imageMode && !newImageThisTurn(baseline, status) {
 						stableCount = 0
-						time.Sleep(pollIntervalActive)
+						if waitOrStop(pollIntervalActive, stop) {
+							return returnStopped()
+						}
+						continue
+					}
+					if waitingForCopy(status) {
+						stableCount = 0
+						if waitOrStop(pollIntervalActive, stop) {
+							return returnStopped()
+						}
 						continue
 					}
 					if strings.TrimSpace(text) == "" && newImageThisTurn(baseline, status) {
@@ -465,12 +555,8 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 			}
 		}
 
-		time.Sleep(pollSleep)
+		if waitOrStop(pollSleep, stop) {
+			return returnStopped()
+		}
 	}
-
-	if lastPartial != "" {
-		return returnPartial("Warning: timed out waiting for reply to finish; showing partial response.")
-	}
-
-	return nil, peakLen, fmt.Errorf("timed out after %s waiting for ChatGPT (very long replies may need several minutes)", responseTimeout)
 }

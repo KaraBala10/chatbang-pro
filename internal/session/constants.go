@@ -4,7 +4,6 @@ import "time"
 
 const (
 	navTimeout             = 60 * time.Second
-	responseTimeout        = 15 * time.Minute
 	pollIntervalActive     = 200 * time.Millisecond
 	pollIntervalDone       = 100 * time.Millisecond
 	stablePollsDefault     = 3
@@ -13,7 +12,6 @@ const (
 	confirmDelayLarge      = 600 * time.Millisecond
 	replySettleWait        = 500 * time.Millisecond
 	partialMinGap          = 15 * time.Second
-	largeResponseThreshold = 6000
 	captureSeenTimeout     = 1500 * time.Millisecond
 	startWaitTimeout       = 45 * time.Second
 	imageSettleTimeout     = 90 * time.Second
@@ -211,6 +209,26 @@ const jsIsStreaming = `
 			if (node.querySelector('[data-is-streaming="true"]')) return true;
 			if (node.querySelector('.result-streaming')) return true;
 			return false;
+		}
+		function hasTurnCopyButton(node) {
+			if (!node) return false;
+			const labeled = node.querySelector('[data-testid="copy-turn-action-button"], button[aria-label="Copy"], button[aria-label="Copy message"], button[title="Copy"]');
+			if (labeled && !labeled.closest("pre, code")) return true;
+			for (const b of node.querySelectorAll("button")) {
+				if (b.closest("pre, code")) continue;
+				const t = ((b.getAttribute("data-testid") || "") + " " + (b.getAttribute("aria-label") || "") + " " + (b.getAttribute("title") || "") + " " + (b.textContent || "")).toLowerCase();
+				if (t.includes("copy-turn") || (/\bcopy\b/.test(t) && !t.includes("copied") && !t.includes("code"))) return true;
+			}
+			return false;
+		}
+		function isTurnThinking(node) {
+			if (!node) return false;
+			if (node.querySelector('[data-testid*="thinking"], [data-testid*="reasoning"]')) return true;
+			const t = (node.innerText || "").replace(/\s+/g, " ").trim().toLowerCase();
+			if (!t) return false;
+			if (t === "thinking" || t.startsWith("thinking ") || t.startsWith("thinking…")) return true;
+			if (t.includes("stopping thinking")) return true;
+			return false;
 		}`
 
 const jsComposer = `
@@ -395,3 +413,181 @@ const jsCopyTurn = `
 				el.remove();
 			}
 		}`
+
+const jsChatGPTAuth = `
+async function chatbangAuthHeaders() {
+	const h = {};
+	try {
+		const r = await fetch("/api/auth/session", { credentials: "include" });
+		if (r.ok) {
+			const d = await r.json();
+			if (d.accessToken) h.authorization = "Bearer " + d.accessToken;
+			const acc = d.account?.id || d.user?.id;
+			if (acc) h["chatgpt-account-id"] = acc;
+		}
+	} catch (e) {}
+	if (!h["chatgpt-account-id"]) {
+		const m = document.cookie.match(/(?:^|;\\s*)_account=([^;]+)/);
+		if (m) h["chatgpt-account-id"] = decodeURIComponent(m[1].trim());
+	}
+	return h;
+}`
+
+const jsFileDownloadHelpers = `
+function chatbangHover(el) {
+	if (!el) return;
+	for (const ev of ["mouseenter", "mouseover", "pointerenter"]) {
+		el.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window }));
+	}
+}
+function chatbangAssistantRoot(nodes) {
+	if (!nodes || !nodes.length) return null;
+	return nodes[nodes.length - 1].closest('section[data-testid^="conversation-turn"]')
+		|| nodes[nodes.length - 1].closest('article')
+		|| nodes[nodes.length - 1];
+}
+function chatbangIsDownloadFileButton(btn) {
+	if (!btn || btn.tagName !== "BUTTON") return false;
+	const label = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+	return label === "download file";
+}
+function chatbangMatchesFileName(text, wantLower) {
+	text = (text || "").toLowerCase();
+	if (!wantLower) return true;
+	if (text.includes(wantLower)) return true;
+	const alt = wantLower.replace(/_/g, " ");
+	if (text.includes(alt)) return true;
+	const stem = wantLower.replace(/\.[^.]+$/, "").replace(/_/g, " ");
+	return stem.length > 2 && text.includes(stem);
+}
+function chatbangMessageIDs(root) {
+	const ids = [];
+	const seen = new Set();
+	const add = (v) => {
+		v = (v || "").trim();
+		if (!v || seen.has(v)) return;
+		seen.add(v);
+		ids.push(v);
+	};
+	if (!root) return ids;
+	for (const el of root.querySelectorAll("[data-message-id], [data-messageId], [data-turn-id]")) {
+		add(el.getAttribute("data-message-id") || el.getAttribute("data-messageId") || el.getAttribute("data-turn-id"));
+	}
+	let el = root;
+	for (let i = 0; i < 12 && el; i++) {
+		for (const attr of ["data-message-id", "data-messageId", "data-turn-id"]) {
+			add(el.getAttribute && el.getAttribute(attr));
+		}
+		el = el.parentElement;
+	}
+	return ids;
+}
+function chatbangFindDownloadURL(obj, depth) {
+	if (!obj || (depth = depth || 0) > 6) return "";
+	if (typeof obj === "string") {
+		if (obj.startsWith("http") || obj.startsWith("/backend-api")) return obj;
+		return "";
+	}
+	if (typeof obj !== "object") return "";
+	for (const k of ["download_url", "downloadUrl", "url", "signed_url", "signedUrl", "href", "link", "file_url", "fileUrl"]) {
+		if (typeof obj[k] === "string" && obj[k]) return obj[k];
+	}
+	for (const v of Object.values(obj)) {
+		const found = chatbangFindDownloadURL(v, depth + 1);
+		if (found) return found;
+	}
+	return "";
+}
+function chatbangIsDownloadRequest(url) {
+	url = (url || "").toLowerCase();
+	return url.includes("interpreter/download") || url.includes("estuary/content") || url.includes("/backend-api/files/");
+}
+function chatbangToB64(arr) {
+	let bin = "";
+	const chunk = 0x8000;
+	for (let i = 0; i < arr.length; i += chunk) {
+		bin += String.fromCharCode.apply(null, arr.subarray(i, i + chunk));
+	}
+	return btoa(bin);
+}
+function chatbangNameFromDisposition(r) {
+	const disp = (r.headers && r.headers.get("content-disposition")) || "";
+	let m = disp.match(/filename\*=UTF-8''([^;]+)/i);
+	if (m) return decodeURIComponent(m[1]);
+	m = disp.match(/filename="?([^";]+)"?/i);
+	return m ? m[1] : "";
+}
+function chatbangFindDownloadTargets(root, wantLower) {
+	const out = [];
+	const seenBtn = new Set();
+	const add = (card, btn) => {
+		if (!btn || !chatbangIsDownloadFileButton(btn) || seenBtn.has(btn)) return;
+		seenBtn.add(btn);
+		out.push({ card: card || btn.parentElement, btn });
+	};
+	for (const btn of root.querySelectorAll('button[aria-label="Download file"]')) {
+		const card = btn.closest("div[class*='group']") || btn.closest("li") || btn.parentElement?.parentElement || btn.parentElement;
+		if (wantLower && card && !chatbangMatchesFileName(card.textContent, wantLower)) continue;
+		add(card, btn);
+	}
+	if (!out.length && wantLower) {
+		for (const el of root.querySelectorAll("div, li, p, span, a")) {
+			if (!chatbangMatchesFileName(el.textContent, wantLower)) continue;
+			const card = el.closest("div[class*='group']") || el.closest("li") || el;
+			chatbangHover(card);
+			const btn = card.querySelector('button[aria-label="Download file"]');
+			if (btn) add(card, btn);
+		}
+	}
+	if (!out.length) {
+		for (const btn of root.querySelectorAll('button[aria-label="Download file"]')) {
+			const card = btn.closest("div[class*='group']") || btn.closest("li") || btn.parentElement?.parentElement || btn.parentElement;
+			add(card, btn);
+		}
+	}
+	return out;
+}
+function chatbangLatestDownloadTarget(root, wantLower) {
+	const all = chatbangFindDownloadTargets(root, wantLower);
+	return all.length ? all[all.length - 1] : null;
+}
+function chatbangMessageIDFrom(el) {
+	let mid = "";
+	for (let i = 0; i < 12 && el; i++) {
+		for (const attr of ["data-message-id", "data-messageId", "data-turn-id"]) {
+			const v = el.getAttribute && el.getAttribute(attr);
+			if (v) { mid = v; break; }
+		}
+		if (mid) break;
+		el = el.parentElement;
+	}
+	return mid;
+}
+function chatbangFetchOpts(headers) {
+	return { credentials: "include", headers, cache: "no-store" };
+}
+function chatbangExtractDownloadURLs(container) {
+	const urls = [];
+	const seen = new Set();
+	const add = (u) => {
+		u = (u || "").trim();
+		if (!u || seen.has(u)) return;
+		seen.add(u);
+		try { urls.push(new URL(u, location.origin).href); } catch (e) {}
+	};
+	if (!container) return urls;
+	const blob = (container.innerHTML || "") + "\n" + (container.outerHTML || "");
+	for (const m of blob.matchAll(/\/backend-api\/conversation\/[^"'\\s]+?\/interpreter\/download\?[^"'\\s<>)]+/g)) add(m[0]);
+	for (const m of blob.matchAll(/\/backend-api\/estuary\/content\?[^"'\\s<>)]+/g)) add(m[0]);
+	for (const a of container.querySelectorAll('a[href*="interpreter/download"], a[href*="estuary/content"]')) {
+		add(a.getAttribute("href"));
+	}
+	return urls;
+}
+function chatbangClickDownloadFileButton(root, wantLower) {
+	const target = chatbangLatestDownloadTarget(root, wantLower);
+	if (!target) return false;
+	chatbangHover(target.card);
+	target.btn.click();
+	return true;
+}`

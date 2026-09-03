@@ -195,6 +195,23 @@ func decodeDataImage(raw string) []byte {
 	return b
 }
 
+func keepFullerText(primary, copied string) string {
+	a := visibleAssistantText(primary)
+	b := visibleAssistantText(copied)
+	switch {
+	case b == "":
+		return a
+	case a == "":
+		return b
+	case len(b) > len(a):
+		return b
+	case strings.Contains(b, a):
+		return b
+	default:
+		return a
+	}
+}
+
 func visibleAssistantText(text string) string {
 	t := stripLeadingReplyChrome(strings.TrimSpace(text))
 	if t == "" {
@@ -447,9 +464,12 @@ func fetchURLViaPage(ctx context.Context, rawURL string) []byte {
 	return data
 }
 
-func formatTurn(text string, images []savedImage) ([]byte, error) {
+func formatTurn(text string, images []savedImage, files []savedFile) ([]byte, error) {
 	var b strings.Builder
 	text = visibleAssistantText(text)
+	if len(files) > 0 {
+		text = cleanFileAttachmentText(text)
+	}
 	if text != "" {
 		rendered, err := renderResponse(text)
 		if err != nil {
@@ -462,6 +482,12 @@ func formatTurn(text string, images []savedImage) ([]byte, error) {
 			b.WriteByte('\n')
 		}
 		fmt.Fprintf(&b, "[image] %s\n", img.Path)
+	}
+	for _, f := range files {
+		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "[file] %s\n", f.Path)
 	}
 	if b.Len() == 0 {
 		return nil, fmt.Errorf("empty response from ChatGPT")

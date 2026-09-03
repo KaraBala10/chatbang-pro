@@ -32,7 +32,7 @@ func renderTerminalMarkdown(body string) string {
 	body = strings.ReplaceAll(body, "\r\n", "\n")
 	var mdLines, imageLines []string
 	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, "[image] ") {
+		if strings.HasPrefix(line, "[image] ") || strings.HasPrefix(line, "[file] ") {
 			imageLines = append(imageLines, line)
 			continue
 		}

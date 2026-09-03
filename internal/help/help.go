@@ -20,7 +20,7 @@ func Print(configPath string) {
 chatbang-pro [flags]
 `+"```"+`
 
-Type a prompt at `+"`> `"+`, wait for `+"`[Thinking...]`"+`, then read the reply. Type **exit** or **quit** to leave cleanly.
+Type a prompt at `+"`> `"+`, wait for `+"`[Thinking...]`"+`, then read the reply. **Ctrl+C** while it is generating stops ChatGPT and prints what was written so far. Type **exit** or **quit** to leave cleanly.
 
 ## Flags
 
@@ -75,9 +75,7 @@ chatbang-pro --config                 # import session from another browser, or 
 
 ## Tips
 
-- Very long replies can take several minutes (up to 15 minutes per answer).
-- After a large reply (>6000 characters), the next prompt starts a **fresh chat** automatically.
-- For follow-ups that need prior context, include that context in the same prompt.
+- Ctrl+C while a reply is generating stops ChatGPT and prints the partial reply.
 `, chaturl.TempURL, configPath)
 	fmt.Println(string(markdown.Render(helpMarkdown, 100, 2)))
 }

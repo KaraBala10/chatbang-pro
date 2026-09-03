@@ -181,7 +181,7 @@ func (c *conversationCapture) sawImageGen() bool {
 	return c.imageGen
 }
 
-func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline responseStatus, lastStatus *string, expectImage bool) (parsedTurn, bool) {
+func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline responseStatus, lastStatus *string, expectImage bool, stop <-chan struct{}) (parsedTurn, bool) {
 	if c == nil || p == nil {
 		return parsedTurn{}, false
 	}
@@ -230,7 +230,7 @@ func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline
 			}
 			return parsedTurn{}, false
 		}
-		if streamDone {
+		if streamDone && streamCaptureReady(status) {
 			if turn, ok := c.readTurn(ctx, p); ok {
 				if turn.HasImage || !(status.ImageGenerating || status.ImagePending) {
 					return turn, true
@@ -267,13 +267,11 @@ func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline
 	defer seenTimer.Stop()
 	ticker := time.NewTicker(pollIntervalDone)
 	defer ticker.Stop()
-	timer := time.NewTimer(responseTimeout)
-	defer timer.Stop()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-stop:
 			return parsedTurn{}, false
-		case <-timer.C:
+		case <-ctx.Done():
 			return parsedTurn{}, false
 		case <-p.seen:
 			seen = true
@@ -300,7 +298,7 @@ func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline
 				continue
 			}
 			status, err := readResponseStatus(ctx, baseline)
-			if err == nil && (status.Generating || status.ImageGenerating) {
+			if err == nil && !streamCaptureReady(status) {
 				continue
 			}
 			return c.readTurn(ctx, p)

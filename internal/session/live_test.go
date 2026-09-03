@@ -45,7 +45,7 @@ func TestLivePingReplyAndURL(t *testing.T) {
 	if err := submitPrompt(ctx, "ping"); err != nil {
 		t.Fatal(err)
 	}
-	text, _, err := waitForResponse(ctx, false, baseline, new(string))
+	text, _, err := waitForResponse(ctx, false, baseline, new(string), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestLivePingReplyAndURL(t *testing.T) {
 	if err := submitPrompt(ctx, "how are you?"); err != nil {
 		t.Fatal(err)
 	}
-	text, _, err = waitForResponse(ctx, false, baseline, new(string))
+	text, _, err = waitForResponse(ctx, false, baseline, new(string), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

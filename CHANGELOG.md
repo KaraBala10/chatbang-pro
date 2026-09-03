@@ -4,6 +4,45 @@ All notable changes to Chatbang Pro are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] - 2026-09-03
+
+**Chatbang Pro — code-interpreter file downloads, cleaner replies, and sturdier Ctrl+C**
+
+### Added
+
+- Code-interpreter attachments — saves files under `~/chatbang/files` and prints `[file] path` in the reply (same idea as `[image]` for generated images)
+- Fetch-based sandbox download — uses ChatGPT's interpreter API with session auth; no browser download prompt spam
+
+### Changed
+
+- Ctrl+C while generating stops the reply but **keeps the browser open** (Chromium runs in its own process group)
+- After Ctrl+C, the composer is reset so the next prompt works without restarting
+- File replies strip Python boilerplate and `sandbox:/mnt/data/...` links when a file was saved locally
+- Downloads the **latest** file card in the assistant turn (not an older attachment from the same message)
+
+### Fixed
+
+- Sandbox file downloads returning HTTP 401 or `no download_url`
+- Browser "allow multiple downloads" blocking repeated file saves
+- Stale file content when ChatGPT updated a file with the same name in one conversation
+
+### Install (Linux amd64)
+
+```bash
+curl -L https://github.com/KaraBala10/chatbang-pro/releases/download/v1.4.0/chatbang-pro.tar.gz | tar -xz
+chmod +x chatbang-pro
+mkdir -p ~/.local/bin
+mv chatbang-pro ~/.local/bin/chatbang-pro
+chatbang-pro --config
+```
+
+### Examples
+
+```bash
+chatbang-pro --no-headless
+chatbang-pro -m "send me a hello world python file"
+```
+
 ## [1.3.0] - 2026-09-02
 
 **Chatbang Pro — image generation, cleaner replies, and more reliable sessions**

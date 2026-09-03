@@ -89,9 +89,17 @@ func TestReplyFinishedIgnoresThinkingChrome(t *testing.T) {
 	if replyFinished(base, thinking) {
 		t.Fatal("Thinking chrome is not a finished reply")
 	}
-	done := responseStatus{NodeCount: 1, UserCount: 1, Len: 40, Tail: "Hello! How can I help you today?"}
+	done := responseStatus{NodeCount: 1, UserCount: 1, Len: 40, Tail: "Hello! How can I help you today?", CopyReady: true}
 	if !replyFinished(base, done) {
 		t.Fatal("finished hello should be ready even if Stop answering is still visible")
+	}
+	heading := responseStatus{NodeCount: 1, UserCount: 1, Len: 22, Tail: "Listing Arabic numbers"}
+	if replyFinished(base, heading) {
+		t.Fatal("a heading without Copy is not a finished reply")
+	}
+	heading.CopyReady = true
+	if !replyFinished(base, heading) {
+		t.Fatal("heading with Copy should be finished")
 	}
 	if replyFinished(base, responseStatus{Generating: true, NodeCount: 1, UserCount: 1, Len: 5, Tail: "Hel"}) {
 		t.Fatal("still generating is not finished")

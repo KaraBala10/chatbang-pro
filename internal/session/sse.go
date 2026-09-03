@@ -6,10 +6,12 @@ import (
 )
 
 type parsedTurn struct {
-	Text      string
-	ImageURLs []string
-	AssetIDs  []string
-	HasImage  bool
+	Text          string
+	ImageURLs     []string
+	AssetIDs      []string
+	SandboxPaths  []string
+	MessageID     string
+	HasImage      bool
 }
 
 func parseConversationSSE(raw string) parsedTurn {
@@ -29,21 +31,27 @@ func parseConversationSSE(raw string) parsedTurn {
 		if err := json.Unmarshal([]byte(data), &obj); err != nil {
 			continue
 		}
-		applySSEObject(obj, &turn.Text)
+		applySSEObject(obj, &turn)
 		scanImages(obj, &turn, seenURL, seenAsset)
 	}
 	turn.Text = strings.TrimSpace(turn.Text)
+	turn.SandboxPaths = uniqueStrings(append(turn.SandboxPaths, extractSandboxPaths(turn.Text)...))
 	turn.HasImage = turn.HasImage || len(turn.ImageURLs) > 0 || len(turn.AssetIDs) > 0
 	return turn
 }
 
-func applySSEObject(obj map[string]any, text *string) {
+func applySSEObject(obj map[string]any, turn *parsedTurn) {
+	text := &turn.Text
 	if msg, _ := obj["message"].(map[string]any); msg != nil {
+		if id, _ := msg["id"].(string); strings.TrimSpace(id) != "" {
+			turn.MessageID = strings.TrimSpace(id)
+		}
 		author, _ := msg["author"].(map[string]any)
 		role, _ := author["role"].(string)
 		if role == "assistant" {
 			if parts := assistantParts(msg); parts != "" {
 				*text = parts
+				turn.SandboxPaths = uniqueStrings(append(turn.SandboxPaths, extractSandboxPaths(parts)...))
 			}
 		}
 	}
@@ -51,6 +59,7 @@ func applySSEObject(obj map[string]any, text *string) {
 	switch v := obj["v"].(type) {
 	case string:
 		*text += v
+		turn.SandboxPaths = uniqueStrings(append(turn.SandboxPaths, extractSandboxPaths(v)...))
 	case []any:
 		for _, item := range v {
 			op, _ := item.(map[string]any)
@@ -65,6 +74,7 @@ func applySSEObject(obj map[string]any, text *string) {
 			if path != "" && !strings.Contains(path, "content/parts") {
 				continue
 			}
+			turn.SandboxPaths = uniqueStrings(append(turn.SandboxPaths, extractSandboxPaths(chunk)...))
 			if op["o"] == "replace" {
 				*text = chunk
 			} else {
@@ -92,7 +102,8 @@ func assistantParts(msg map[string]any) string {
 func scanImages(v any, turn *parsedTurn, seenURL, seenAsset map[string]bool) {
 	switch x := v.(type) {
 	case map[string]any:
-		if ct, _ := x["content_type"].(string); isImageContentType(ct) {
+		ct, _ := x["content_type"].(string)
+		if isImageContentType(ct) {
 			turn.HasImage = true
 		}
 		if name, _ := x["name"].(string); isImageToolName(name) {
@@ -105,10 +116,13 @@ func scanImages(v any, turn *parsedTurn, seenURL, seenAsset map[string]bool) {
 			turn.HasImage = true
 		}
 		if pointer, _ := x["asset_pointer"].(string); pointer != "" {
-			turn.HasImage = true
-			if id := fileIDFromPointer(pointer); id != "" && !seenAsset[id] {
+			id := fileIDFromPointer(pointer)
+			if id != "" && !seenAsset[id] {
 				seenAsset[id] = true
 				turn.AssetIDs = append(turn.AssetIDs, id)
+			}
+			if isImageContentType(ct) || ct == "" {
+				turn.HasImage = true
 			}
 		}
 		for _, key := range []string{"url", "download_url", "downloadUrl", "src", "image_url"} {
@@ -130,6 +144,9 @@ func scanImages(v any, turn *parsedTurn, seenURL, seenAsset map[string]bool) {
 			seenURL[x] = true
 			turn.ImageURLs = append(turn.ImageURLs, x)
 			turn.HasImage = true
+		}
+		if strings.Contains(x, "sandbox:") {
+			turn.SandboxPaths = uniqueStrings(append(turn.SandboxPaths, extractSandboxPaths(x)...))
 		}
 		if id := fileIDFromPointer(x); strings.Contains(x, "file-service://") && id != "" && !seenAsset[id] {
 			seenAsset[id] = true

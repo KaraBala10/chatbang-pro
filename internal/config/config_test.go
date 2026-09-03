@@ -34,6 +34,9 @@ func TestPathsForHome(t *testing.T) {
 	if p.Images != "/home/user/chatbang/images" {
 		t.Fatalf("unexpected images path: %s", p.Images)
 	}
+	if p.Files != "/home/user/chatbang/files" {
+		t.Fatalf("unexpected files path: %s", p.Files)
+	}
 }
 
 func TestDetectBrowserPrefersChromiumOverBrowserOS(t *testing.T) {
