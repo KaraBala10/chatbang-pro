@@ -11,3 +11,4 @@ vendor/
 *.nix
 result/
 direnv/
+sync-remote.sh

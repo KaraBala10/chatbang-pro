@@ -75,10 +75,24 @@ func (s *Session) RunTurn(prompt string) {
 	result, peak, err := s.runTurn(prompt)
 	s.lastPeak = peak
 	if err != nil {
+		if sendFailed(err) {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
 		fatalChatErr(err)
 	}
 	fmt.Print(formatReplyBlock(string(result)))
 	s.announceConversationURL()
+}
+
+func sendFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "could not send prompt") ||
+		strings.Contains(msg, "composer not ready") ||
+		strings.Contains(msg, "rate-limiting")
 }
 
 func (s *Session) runTurn(prompt string) ([]byte, int, error) {
@@ -116,6 +130,9 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 			return nil, peak, err
 		}
 		return nil, peak, ferr
+	}
+	if len(images) > 0 {
+		_ = waitComposerSendable(s.ctx, 6*time.Second)
 	}
 	return out, max(peak, len(text), 1), nil
 }
@@ -459,14 +476,34 @@ func (s *Session) conversationTarget() string {
 	return chaturl.ConversationPermalink(loc)
 }
 
+func waitComposerSendable(ctx context.Context, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_ = dismissBlockingDialogs(ctx)
+		if composerSendable(ctx) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
 func (s *Session) ensureComposerReady() error {
 	_ = dismissBlockingDialogs(s.ctx)
-	if composerSendable(s.ctx) {
+	if waitComposerSendable(s.ctx, 5*time.Second) {
 		return nil
 	}
 	_ = dismissStaleStop(s.ctx)
-	_ = waitForSendButton(s.ctx, 200*time.Millisecond)
-	return nil
+	if waitComposerSendable(s.ctx, 3*time.Second) {
+		return nil
+	}
+	if err := s.reloadConversation(); err != nil {
+		return err
+	}
+	if waitComposerSendable(s.ctx, 8*time.Second) {
+		return nil
+	}
+	return fmt.Errorf("composer not ready after reload")
 }
 
 func (s *Session) reloadConversation() error {

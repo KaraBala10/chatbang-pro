@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Truncated or chrome-only replies (`Thinking`, leftover Stop button)
 - Image turns treated as finished before the image was ready
 - Follow-up send failing when a disabled Stop control stayed in the composer
+- After several image generations, the next text prompt could fail and exit the CLI; the composer is waited on, and a send failure stays in the session
 
 ### Install (Linux amd64)
 
