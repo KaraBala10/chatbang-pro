@@ -92,7 +92,8 @@ func sendFailed(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "could not send prompt") ||
 		strings.Contains(msg, "composer not ready") ||
-		strings.Contains(msg, "rate-limiting")
+		strings.Contains(msg, "rate-limiting") ||
+		strings.Contains(msg, "no conversation url")
 }
 
 func (s *Session) runTurn(prompt string) ([]byte, int, error) {
@@ -495,6 +496,11 @@ func (s *Session) ensureComposerReady() error {
 	}
 	_ = dismissStaleStop(s.ctx)
 	if waitComposerSendable(s.ctx, 3*time.Second) {
+		return nil
+	}
+	if s.conversationTarget() == "" {
+		// First turn has no /c/{uuid} yet; submitPrompt waits for Send.
+		_ = waitForSendButton(s.ctx, 5*time.Second)
 		return nil
 	}
 	if err := s.reloadConversation(); err != nil {
