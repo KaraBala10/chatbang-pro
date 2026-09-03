@@ -16,6 +16,7 @@ type responseStatus struct {
 	ImageCount      int    `json:"imageCount"`
 	ImageGenerating bool   `json:"imageGenerating"`
 	ImagePending    bool   `json:"imagePending"`
+	ImageFailed     bool   `json:"imageFailed"`
 	LastImage       string `json:"lastImage"`
 	StatusLine      string `json:"statusLine"`
 	Len             int    `json:"len"`
@@ -48,6 +49,10 @@ func evaluateResponseStatus(ctx context.Context) (responseStatus, error) {
 		const streamingNode = document.querySelector('[data-is-streaming="true"]');
 		if (!nodes.length) {
 			const pendingRoot = document.body;
+			const blockedMsg = imageGenBlockMessage(pendingRoot);
+			if (blockedMsg) {
+				return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, lastImage: "", statusLine: "", nodeCount: 0, userCount: userCount, imageCount: 0, len: Math.max(blockedMsg.length, 1), tail: blockedMsg};
+			}
 			const pending = isImageGenPending(pendingRoot);
 			const line = pending ? (imageGenStatusLine(pendingRoot) || "Generating image...") : "";
 			return {generating: stop || pending, imageGenerating: pending, imagePending: pending, lastImage: "", statusLine: line, nodeCount: 0, userCount: userCount, imageCount: 0};
@@ -57,16 +62,20 @@ func evaluateResponseStatus(ctx context.Context) (responseStatus, error) {
 		const imgs = imageSrcs(root);
 		const lastImage = imageKey(imgs[0] || "");
 		const finished = hasFinishedImage(root);
-		const imagePending = isImageGenPending(root);
-		const waitingOnImageFollowUp = stop && userCount > nodes.length && finished;
+		const blockedMsg = imageGenBlockMessage(root);
+		const imagePending = !blockedMsg && isImageGenPending(root);
+		const waitingOnImageFollowUp = !blockedMsg && stop && userCount > nodes.length && finished;
 		const pending = imagePending || waitingOnImageFollowUp;
-		const hasImage = finished || imgs.length > 0;
+		const hasImage = !blockedMsg && (finished || imgs.length > 0);
 		const streaming = isStillStreaming(last) || isStillStreaming(root) || !!streamingNode;
 		const statusLine = pending ? (imageGenStatusLine(root) || "Generating image...") : "";
 		const rawTc = assistantTextWithoutImageGen(last);
-		const chrome = isReplyChrome(rawTc);
+		const chrome = !blockedMsg && isReplyChrome(rawTc);
 		const tc = chrome ? "" : rawTc;
 		const len = tc.length;
+		if (blockedMsg) {
+			return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, lastImage: lastImage, statusLine: "", imageCount: 0, len: Math.max(blockedMsg.length, 1), tail: blockedMsg, nodeCount: nodes.length, userCount: userCount};
+		}
 		if (finished && !pending) {
 			return {generating: false, hasImage: true, imageGenerating: false, imagePending: false, lastImage: lastImage, statusLine: "", imageCount: Math.max(imgs.length, 1), len: Math.max(len, 1), tail: tc.substring(Math.max(0, len - 400)), nodeCount: nodes.length, userCount: userCount};
 		}
@@ -238,6 +247,9 @@ func statusKey(line string) string {
 }
 
 func replyFinished(baseline, status responseStatus) bool {
+	if imageGenFailed(status) {
+		return true
+	}
 	if status.Generating || status.ImageGenerating || status.ImagePending {
 		return false
 	}
@@ -261,6 +273,20 @@ func responseAlreadyComplete(baseline, status responseStatus, expectImage bool) 
 }
 
 func grabFinishedReply(ctx context.Context, baseline, status responseStatus, imageMode bool) ([]byte, int, bool, error) {
+	if imageGenFailed(status) {
+		msg := visibleAssistantText(status.Tail)
+		if msg == "" {
+			text, _, _ := confirmFullResponse(ctx, 0)
+			msg = visibleAssistantText(text)
+		}
+		if msg == "" {
+			msg = visibleAssistantText(status.StatusLine)
+		}
+		if msg != "" {
+			out, err := renderResponse(msg)
+			return out, max(len(msg), 1), true, err
+		}
+	}
 	if imageMode && newImageThisTurn(baseline, status) && !status.Generating && !status.ImageGenerating {
 		return []byte(""), max(status.Len, status.ImageCount, 1), true, nil
 	}
@@ -275,7 +301,7 @@ func grabFinishedReply(ctx context.Context, baseline, status responseStatus, ima
 		return nil, 0, false, nil
 	}
 	if vis := visibleAssistantText(text); vis != "" {
-		if imageMode && !newImageThisTurn(baseline, status) && !status.HasImage {
+		if imageMode && !newImageThisTurn(baseline, status) && !status.HasImage && !imageGenFailed(status) && !isImageGenFailureText(vis) {
 			return nil, 0, false, nil
 		}
 		out, err := renderResponse(vis)

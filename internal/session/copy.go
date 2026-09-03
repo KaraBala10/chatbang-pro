@@ -2,65 +2,77 @@ package session
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
 func copyAssistantReply(ctx context.Context) string {
-	_ = dismissChatDialogs(ctx)
-	deadline := time.Now().Add(4 * time.Second)
-	for time.Now().Before(deadline) {
+	if text := tryCopyAssistantReply(ctx); text != "" {
+		return text
+	}
+	if dismissChatDialogs(ctx) {
 		if text := tryCopyAssistantReply(ctx); text != "" {
 			return text
 		}
-		if dismissChatDialogs(ctx) {
-			time.Sleep(200 * time.Millisecond)
-			continue
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		time.Sleep(40 * time.Millisecond)
+		if text := tryCopyAssistantReply(ctx); text != "" {
+			return text
 		}
-		time.Sleep(150 * time.Millisecond)
 	}
 	return ""
 }
 
 func tryCopyAssistantReply(ctx context.Context) string {
-	prepJS := `(() => {
+	js := `(() => {
 		` + jsCopyTurn + `
 		installCopyHook();
 		window.__chatbangCopied = "";
-		document.querySelectorAll("[data-chatbang-copy]").forEach((el) => el.removeAttribute("data-chatbang-copy"));
 		const btn = lastTurnCopyButton();
-		if (!btn) return false;
-		btn.setAttribute("data-chatbang-copy", "1");
-		return true;
+		if (!btn) return "";
+		const realHasFocus = Document.prototype.hasFocus;
+		Document.prototype.hasFocus = function() { return true; };
+		const restore = () => { Document.prototype.hasFocus = realHasFocus; };
+		try { btn.click(); } catch (e) {}
+		dismissCopyFailureToast();
+		const now = (window.__chatbangCopied || "").trim();
+		if (now) { restore(); return now; }
+		return new Promise((resolve) => {
+			const t0 = performance.now();
+			const tick = () => {
+				dismissCopyFailureToast();
+				const t = (window.__chatbangCopied || "").trim();
+				if (t || performance.now() - t0 > 150) {
+					restore();
+					resolve(t);
+				} else requestAnimationFrame(tick);
+			};
+			queueMicrotask(tick);
+		});
 	})()`
-	var found bool
-	if err := chromedp.Run(ctx, chromedp.Evaluate(prepJS, &found)); err != nil || !found {
+	var text string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &text, awaitPromise)); err != nil {
 		return ""
 	}
+	return strings.TrimSpace(text)
+}
 
-	_ = chromedp.Run(ctx, chromedp.Click(`[data-chatbang-copy="1"]`, chromedp.ByQuery))
-	clickJS := `(() => {
-		` + jsCopyTurn + `
-		installCopyHook();
-		const b = document.querySelector("[data-chatbang-copy]") || lastTurnCopyButton();
-		if (!b) return false;
-		b.click();
-		return true;
-	})()`
-	_ = chromedp.Run(ctx, chromedp.Evaluate(clickJS, nil))
+func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+	return p.WithAwaitPromise(true)
+}
 
-	readJS := `(() => (window.__chatbangCopied || "").trim())()`
-	wait := time.Now().Add(400 * time.Millisecond)
-	for time.Now().Before(wait) {
-		var text string
-		if err := chromedp.Run(ctx, chromedp.Evaluate(readJS, &text)); err != nil {
-			return ""
+func enableCopyHook() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := page.Enable().Do(ctx); err != nil {
+			return err
 		}
-		if text != "" {
-			return text
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return ""
+		_, err := page.AddScriptToEvaluateOnNewDocument(jsClipboardHookBoot).Do(ctx)
+		return err
+	})
 }

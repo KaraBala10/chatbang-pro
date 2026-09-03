@@ -113,6 +113,41 @@ func TestVisibleAssistantText(t *testing.T) {
 	}
 }
 
+func TestStripImageGenJSON(t *testing.T) {
+	raw := `{"size":"1024x1024","n":1,"transparent_background":false,"is_style_transfer":false,"prompt`
+	if visibleAssistantText(raw) != "" {
+		t.Fatalf("image-gen json should be dropped, got %q", visibleAssistantText(raw))
+	}
+	if visibleAssistantText("Hello") != "Hello" {
+		t.Fatal("plain text should stay")
+	}
+}
+
+func TestImageGenFailureText(t *testing.T) {
+	msg := "We're so sorry, but the image we created may violate our guardrails concerning similarity to third-party content. If you think we got it wrong, please retry or edit your prompt."
+	if !isImageGenFailureText(msg) {
+		t.Fatal("expected guardrail text")
+	}
+	if !imageGenFailed(responseStatus{ImageFailed: true, Tail: msg}) {
+		t.Fatal("ImageFailed flag")
+	}
+	if isImageGenFailureText("Hello") {
+		t.Fatal("plain hello is not a failure")
+	}
+	want := "We're so sorry, but the image we created may violate our guardrails concerning similarity to third-party content. If you think we got it wrong, please retry or edit your prompt."
+	cases := []string{
+		"Worked for 51s We're so sorry, but the image we created may violate our guardrails concerning similarity to third-party content. If you think we got it wrong, please retry or edit your prompt.",
+		"Worked for 51s We’re so sorry, but the image we created may violate our guardrails concerning similarity to third-party content. If you think we got it wrong, please retry or edit your prompt.",
+		"Worked for 51s\n\nWe're so sorry, but the image we created may violate our guardrails concerning similarity to third-party content. If you think we got it wrong, please retry or edit your prompt.",
+		"ChatGPT said: Worked for 51s We're so sorry, but the image we created may violate our guardrails concerning similarity to third-party content. If you think we got it wrong, please retry or edit your prompt.",
+	}
+	for _, in := range cases {
+		if got := visibleAssistantText(in); got != want {
+			t.Fatalf("got %q want %q from %q", got, want, in)
+		}
+	}
+}
+
 func TestStatusKeyTreatsEllipsisAsSame(t *testing.T) {
 	if statusKey("Generating image...") != statusKey("Generating image") {
 		t.Fatal("ellipsis should not count as a new status")

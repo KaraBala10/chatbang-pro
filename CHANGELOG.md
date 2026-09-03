@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Image turns treated as finished before the image was ready
 - Follow-up send failing when a disabled Stop control stayed in the composer
 - After several image generations, the next text prompt could fail and exit the CLI; the composer is waited on, and a send failure stays in the session
+- Image policy/guardrail failures now print the sorry message instead of hanging on `[Generating image...]`
+- Composer fill no longer waits for Send on an empty box, so follow-up prompts paste immediately
+- Copy capture is faster and no longer trips ChatGPT's "document lost focus" warning
 
 ### Install (Linux amd64)
 

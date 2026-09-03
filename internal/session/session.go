@@ -104,26 +104,41 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 	}
 
 	var text string
-	var images []savedImage
 	var peak int
 	if captured {
-		images = s.collectImages(turn)
 		text = turn.Text
 		peak = max(len(turn.Text), 1)
 	} else {
-		expectImage := looksLikeImagePrompt(prompt) || (s.capture != nil && s.capture.sawImageGen())
-		raw, p, waitErr := waitForResponse(s.ctx, expectImage, baseline, &s.statusLine)
+		raw, p, waitErr := waitForResponse(s.ctx, looksLikeImagePrompt(prompt), baseline, &s.statusLine)
 		peak = p
-		after, _ := readResponseStatus(s.ctx, baseline)
-		images = s.collectImages(parsedTurn{HasImage: expectImage || newImageThisTurn(baseline, after)})
-		if waitErr != nil && len(images) == 0 {
-			return nil, peak, waitErr
-		}
 		text = string(raw)
 		err = waitErr
 	}
-	if copied := copyAssistantReply(s.ctx); copied != "" {
-		text = copied
+	if !isImageGenFailureText(text) {
+		if copied := copyAssistantReply(s.ctx); copied != "" {
+			vis := visibleAssistantText(copied)
+			if vis != "" {
+				text = vis
+			}
+		}
+	}
+	after, _ := readResponseStatus(s.ctx, baseline)
+	if imageGenFailed(after) {
+		if vis := visibleAssistantText(text); vis != "" {
+			text = vis
+		} else if tail := visibleAssistantText(after.Tail); tail != "" {
+			text = tail
+		}
+	}
+	thisImage := !imageGenFailed(after) && (looksLikeImagePrompt(prompt) || newImageThisTurn(baseline, after))
+	var images []savedImage
+	if thisImage {
+		pt := turn
+		pt.HasImage = true
+		images = s.collectImages(pt)
+	}
+	if err != nil && len(images) == 0 {
+		return nil, peak, err
 	}
 	out, ferr := formatTurn(text, images)
 	if ferr != nil {
@@ -133,7 +148,7 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 		return nil, peak, ferr
 	}
 	if len(images) > 0 {
-		_ = waitComposerSendable(s.ctx, 6*time.Second)
+		_ = waitComposerAccepts(s.ctx, 2*time.Second)
 	}
 	return out, max(peak, len(text), 1), nil
 }
@@ -344,7 +359,7 @@ func (s *Session) openTab() error {
 	s.ctx, s.ctxCancel = chromedp.NewContext(s.allocCtx, chromedp.WithErrorf(suppressChromedpNoise))
 	s.capture = listenConversation(s.ctx)
 	fmt.Fprintf(os.Stderr, "Opening %s…\n", s.chatURL)
-	if err := chromedp.Run(s.ctx, enableNetwork(), chromedp.Navigate(s.chatURL)); err != nil {
+	if err := chromedp.Run(s.ctx, enableNetwork(), enableCopyHook(), chromedp.Navigate(s.chatURL)); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Waiting for chat to start…")
@@ -453,16 +468,6 @@ func (s *Session) prepareForPrompt() error {
 	return waitForChatReady(s.ctx, s.chatURL)
 }
 
-func composerSendable(ctx context.Context) bool {
-	js := `(() => {
-		` + jsComposer + `
-		return isSendableControl(composerButton());
-	})()`
-	var ok bool
-	_ = chromedp.Run(ctx, chromedp.Evaluate(js, &ok))
-	return ok
-}
-
 func (s *Session) conversationTarget() string {
 	if p := chaturl.ConversationPermalink(s.convURL); p != "" {
 		return p
@@ -477,34 +482,37 @@ func (s *Session) conversationTarget() string {
 	return chaturl.ConversationPermalink(loc)
 }
 
-func waitComposerSendable(ctx context.Context, timeout time.Duration) bool {
+func composerAcceptsPrompt(ctx context.Context) bool {
+	js := `(() => {
+		` + jsComposer + `
+		return composerCanAcceptPrompt();
+	})()`
+	var ok bool
+	_ = chromedp.Run(ctx, chromedp.Evaluate(js, &ok))
+	return ok
+}
+
+func waitComposerAccepts(ctx context.Context, timeout time.Duration) bool {
+	if composerAcceptsPrompt(ctx) {
+		return true
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		_ = dismissBlockingDialogs(ctx)
-		if composerSendable(ctx) {
+		if composerAcceptsPrompt(ctx) {
 			return true
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	return false
 }
 
 func (s *Session) ensureComposerReady() error {
 	_ = dismissBlockingDialogs(s.ctx)
-	if waitComposerSendable(s.ctx, 5*time.Second) {
+	if composerAcceptsPrompt(s.ctx) {
 		return nil
 	}
 	_ = dismissStaleStop(s.ctx)
-	if waitComposerSendable(s.ctx, 3*time.Second) {
-		return nil
-	}
-	if s.conversationTarget() == "" {
-		// First turn has no /c/{uuid} yet; submitPrompt waits for Send.
-		_ = waitForSendButton(s.ctx, 5*time.Second)
-		return nil
-	}
-	_ = s.reloadConversation()
-	_ = waitComposerSendable(s.ctx, 8*time.Second)
+	_ = waitComposerAccepts(s.ctx, composerIdleWait)
 	return nil
 }
 
@@ -520,7 +528,7 @@ func (s *Session) reloadConversation() error {
 	if err := waitForChatReady(s.ctx, target); err != nil {
 		return err
 	}
-	_ = waitForSendButton(s.ctx, 3*time.Second)
+	_ = waitComposerAccepts(s.ctx, 3*time.Second)
 	return nil
 }
 
@@ -529,14 +537,11 @@ func submitPrompt(ctx context.Context, prompt string) error {
 	if err := dismissStaleStop(ctx); err != nil {
 		return err
 	}
-	if err := chromedp.Run(ctx, chromedp.WaitVisible(`#prompt-textarea`, chromedp.ByID)); err != nil {
-		return err
-	}
 	before := pageUserCount(ctx)
 	if err := fillPrompt(ctx, prompt); err != nil {
 		return err
 	}
-	_ = waitForSendButton(ctx, 2*time.Second)
+	_ = waitForSendButton(ctx, sendAfterFillWait)
 	if err := sendComposer(ctx); err != nil {
 		return err
 	}
@@ -549,17 +554,11 @@ func submitPrompt(ctx context.Context, prompt string) error {
 	if promptSubmitted(ctx, prompt, before) {
 		return nil
 	}
-	if err := sendComposer(ctx); err != nil {
-		return err
-	}
-	if promptSubmitted(ctx, prompt, before) {
-		return nil
-	}
 	if dismissChatDialogs(ctx) {
-		_ = waitForSendButton(ctx, 2*time.Second)
 		if err := fillPrompt(ctx, prompt); err != nil {
 			return err
 		}
+		_ = waitForSendButton(ctx, sendAfterFillWait)
 		if err := sendComposer(ctx); err != nil {
 			return err
 		}
@@ -572,53 +571,55 @@ func submitPrompt(ctx context.Context, prompt string) error {
 }
 
 func fillPrompt(ctx context.Context, prompt string) error {
-	if err := chromedp.Run(ctx, chromedp.Click(`#prompt-textarea`, chromedp.ByID)); err != nil {
+	want := strings.TrimSpace(prompt)
+	shown, err := setComposerText(ctx, prompt)
+	if err != nil {
 		return err
 	}
-	_ = chromedp.Run(ctx, chromedp.SendKeys(`#prompt-textarea`, kb.Control+"a"+kb.Backspace, chromedp.ByID))
+	if composerHasPrompt(shown, want) {
+		return nil
+	}
 	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		return input.InsertText(prompt).Do(ctx)
 	})); err != nil {
 		return err
 	}
-	want := strings.TrimSpace(prompt)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(pageComposerText(ctx), want) {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
+	if composerHasPrompt(pageComposerText(ctx), want) {
+		return nil
 	}
-	promptJSON, err := json.Marshal(prompt)
+	shown, err = setComposerText(ctx, prompt)
 	if err != nil {
 		return err
 	}
-	setPromptJS := fmt.Sprintf(`(() => {
-		const text = %s;
+	if composerHasPrompt(shown, want) {
+		return nil
+	}
+	return fmt.Errorf("could not fill ChatGPT composer")
+}
+
+func setComposerText(ctx context.Context, prompt string) (string, error) {
+	promptJSON, err := json.Marshal(prompt)
+	if err != nil {
+		return "", err
+	}
+	js := fmt.Sprintf(`(() => {
+		`+jsComposer+`
 		const el = document.querySelector('#prompt-textarea');
 		if (!el) throw new Error('prompt textarea not found');
-		el.focus();
-		if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-			const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-			const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-			if (desc && desc.set) desc.set.call(el, text); else el.value = text;
-			el.dispatchEvent(new Event('input', { bubbles: true }));
-			return 'input';
-		}
-		const sel = window.getSelection();
-		const range = document.createRange();
-		range.selectNodeContents(el);
-		sel.removeAllRanges();
-		sel.addRange(range);
-		const ok = document.execCommand('insertText', false, text);
-		const shown = (el.innerText || el.textContent || '').trim();
-		if (!ok || (text && !shown)) {
-			el.textContent = text;
-			el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
-		}
-		return 'editable';
+		return setComposerText(%s);
 	})()`, promptJSON)
-	return chromedp.Run(ctx, chromedp.Evaluate(setPromptJS, nil))
+	var shown string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(js, &shown)); err != nil {
+		return "", err
+	}
+	return shown, nil
+}
+
+func composerHasPrompt(shown, want string) bool {
+	if want == "" {
+		return strings.TrimSpace(shown) == ""
+	}
+	return strings.Contains(strings.TrimSpace(shown), want)
 }
 
 func dismissStaleStop(ctx context.Context) error {
@@ -636,7 +637,8 @@ func dismissStaleStop(ctx context.Context) error {
 	if st == "ready" {
 		return nil
 	}
-	return waitForSendButton(ctx, 2*time.Second)
+	_ = waitComposerAccepts(ctx, composerIdleWait)
+	return nil
 }
 
 func waitForSendButton(ctx context.Context, timeout time.Duration) error {
@@ -659,16 +661,16 @@ func waitForSendButton(ctx context.Context, timeout time.Duration) error {
 }
 
 func sendComposer(ctx context.Context) error {
-	readyJS := `(() => {
+	clickJS := `(() => {
 		` + jsComposer + `
-		return isSendableControl(composerButton());
+		return clickSend();
 	})()`
-	var ready bool
-	if err := chromedp.Run(ctx, chromedp.Evaluate(readyJS, &ready)); err != nil {
+	var ok bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(clickJS, &ok)); err != nil {
 		return err
 	}
-	if ready {
-		return chromedp.Run(ctx, chromedp.Click(`#composer-submit-button`, chromedp.ByID))
+	if ok {
+		return nil
 	}
 	return sendComposerEnter(ctx)
 }

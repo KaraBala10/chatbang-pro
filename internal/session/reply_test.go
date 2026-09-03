@@ -57,3 +57,15 @@ func TestRenderTerminalMarkdownKeepsImageLine(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestComposerHasPrompt(t *testing.T) {
+	if !composerHasPrompt("hello", "hello") {
+		t.Fatal("exact match")
+	}
+	if !composerHasPrompt("hello there", "hello") {
+		t.Fatal("contains match")
+	}
+	if composerHasPrompt("hi", "hello") {
+		t.Fatal("should not match")
+	}
+}

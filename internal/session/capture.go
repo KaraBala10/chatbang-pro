@@ -209,6 +209,15 @@ func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline
 			return parsedTurn{}, false
 		}
 		printChatStatus(status, lastStatus)
+		if imageGenFailed(status) {
+			msg := strings.TrimSpace(status.Tail)
+			if msg == "" {
+				msg = strings.TrimSpace(status.StatusLine)
+			}
+			if msg != "" {
+				return parsedTurn{Text: msg}, true
+			}
+		}
 		if newImageThisTurn(baseline, status) && !status.ImageGenerating && !status.Generating {
 			return parsedTurn{HasImage: true}, true
 		}

@@ -18,6 +18,8 @@ const (
 	startWaitTimeout       = 45 * time.Second
 	imageSettleTimeout     = 90 * time.Second
 	minGeneratedImageBytes = 8 * 1024
+	sendAfterFillWait      = 400 * time.Millisecond
+	composerIdleWait       = 800 * time.Millisecond
 )
 
 const jsAssistantNodes = `
@@ -81,8 +83,40 @@ const jsImageHelpers = `
 			if (root.querySelector('[aria-label="Edit image"], [aria-label="Share this image"], [data-testid="good-image-turn-action-button"], [data-testid="image-gen-overlay-actions"]')) return true;
 			return false;
 		}
+		function imageGenBlockMessage(root) {
+			if (!root) return "";
+			const keys = [
+				"guardrail", "third-party content", "violate our",
+				"we're so sorry", "we are so sorry", "we are sorry",
+				"couldn't create", "could not create", "couldn't generate",
+				"could not generate", "unable to generate", "against our policies",
+				"content policy", "can't generate this", "cannot generate this"
+			];
+			let best = "";
+			const consider = (t) => {
+				t = (t || "").replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, " ").trim();
+				if (!t) return;
+				const low = t.toLowerCase();
+				if (!keys.some((k) => low.includes(k))) return;
+				if (t.length > best.length) best = t;
+			};
+			consider(root.innerText || root.textContent || "");
+			for (const el of imageGenNodes(root)) {
+				consider(el.innerText || el.textContent || "");
+			}
+			best = best.replace(/[\u2018\u2019]/g, "'");
+			best = best.replace(/^(worked for|thought for|thinking for)\s+\d+\s*(s|sec|secs|seconds|m|min|mins|minutes)\.?\b\s*/i, "").trim();
+			const lowBest = best.toLowerCase();
+			let cut = -1;
+			for (const start of ["we're so sorry", "we are so sorry", "we are sorry"]) {
+				const i = lowBest.indexOf(start);
+				if (i >= 0 && (cut < 0 || i < cut)) cut = i;
+			}
+			if (cut > 0) best = best.slice(cut).trim();
+			return best;
+		}
 		function isImageGenPending(root) {
-			if (!root || isImageGenDone(root)) return false;
+			if (!root || isImageGenDone(root) || imageGenBlockMessage(root)) return false;
 			return imageGenNodes(root).length > 0;
 		}
 		function imageGenStatusLine(root) {
@@ -100,8 +134,11 @@ const jsImageHelpers = `
 		}
 		function assistantTextWithoutImageGen(node) {
 			if (!node) return "";
+			const blocked = imageGenBlockMessage(imageRoot(node) || node);
 			const clone = node.cloneNode(true);
 			for (const el of imageGenNodes(clone)) el.remove();
+			const t = (clone.textContent || "").replace(/\s+/g, " ").trim();
+			if (blocked) return t && t !== blocked ? (t + "\n\n" + blocked) : blocked;
 			return clone.textContent || "";
 		}
 		function imageSrcs(root) {
@@ -224,6 +261,41 @@ const jsComposer = `
 		function composerText() {
 			const el = document.querySelector('#prompt-textarea');
 			return ((el && (el.innerText || el.value || el.textContent)) || '').replace(/\u200b/g, '').trim();
+		}
+		function composerCanAcceptPrompt() {
+			if (!document.querySelector('#prompt-textarea')) return false;
+			return !isStopControl(composerButton());
+		}
+		function setComposerText(text) {
+			const el = document.querySelector('#prompt-textarea');
+			if (!el) return '';
+			el.focus();
+			if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+				const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+				const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+				if (desc && desc.set) desc.set.call(el, text); else el.value = text;
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+				return composerText();
+			}
+			const sel = window.getSelection();
+			const range = document.createRange();
+			range.selectNodeContents(el);
+			sel.removeAllRanges();
+			sel.addRange(range);
+			document.execCommand('selectAll', false, null);
+			document.execCommand('insertText', false, text);
+			const shown = composerText();
+			if (text && !shown) {
+				el.textContent = text;
+				el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+			}
+			return composerText();
+		}
+		function clickSend() {
+			const b = composerButton();
+			if (!isSendableControl(b)) return false;
+			b.click();
+			return true;
 		}`
 
 const jsDismissDialogs = `
@@ -256,6 +328,42 @@ const jsDismissDialogs = `
 			return null;
 		}`
 
+const jsClipboardHookInner = `
+		window.__chatbangCopied = window.__chatbangCopied || "";
+		const grab = (text) => { window.__chatbangCopied = String(text ?? ""); };
+		const writeText = function(text) { grab(text); return Promise.resolve(); };
+		const write = function(items) {
+			try {
+				const item = items && items[0];
+				if (item && item.getType) item.getType("text/plain").then((b) => b.text()).then(grab).catch(() => {});
+			} catch (e) {}
+			return Promise.resolve();
+		};
+		try {
+			if (window.Clipboard && Clipboard.prototype) {
+				Clipboard.prototype.writeText = writeText;
+				Clipboard.prototype.write = write;
+			}
+		} catch (e) {}
+		try {
+			const c = navigator.clipboard;
+			if (c) {
+				c.writeText = writeText;
+				c.write = write;
+			}
+		} catch (e) {}
+		if (!window.__chatbangCopyListener) {
+			window.__chatbangCopyListener = true;
+			document.addEventListener("copy", function(e) {
+				try {
+					const t = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
+					if (t) grab(t);
+				} catch (err) {}
+			}, true);
+		}`
+
+const jsClipboardHookBoot = `(() => {` + jsClipboardHookInner + `})()`
+
 const jsCopyTurn = `
 		function lastAssistantTurn() {
 			` + jsAssistantNodes + `
@@ -275,30 +383,15 @@ const jsCopyTurn = `
 			return null;
 		}
 		function installCopyHook() {
-			if (window.__chatbangCopyHook) return;
-			window.__chatbangCopyHook = true;
-			window.__chatbangCopied = "";
-			const grab = (text) => { window.__chatbangCopied = String(text ?? ""); };
-			try {
-				if (window.Clipboard && Clipboard.prototype.writeText) {
-					Clipboard.prototype.writeText = function(text) {
-						grab(text);
-						return Promise.resolve();
-					};
-				}
-			} catch (e) {}
-			try {
-				if (navigator.clipboard && navigator.clipboard.writeText) {
-					navigator.clipboard.writeText = function(text) {
-						grab(text);
-						return Promise.resolve();
-					};
-				}
-			} catch (e) {}
-			document.addEventListener("copy", function(e) {
-				try {
-					const t = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
-					if (t) grab(t);
-				} catch (err) {}
-			}, true);
+` + jsClipboardHookInner + `
+		}
+		function dismissCopyFailureToast() {
+			const keys = ["lost focus", "copy failed", "document is not focused", "couldn't copy", "could not copy"];
+			for (const el of document.querySelectorAll('[role="status"], [role="alert"], [role="log"]')) {
+				const t = (el.innerText || "").replace(/\s+/g, " ").trim();
+				if (!t || t.length > 240) continue;
+				const low = t.toLowerCase();
+				if (!keys.some((k) => low.includes(k))) continue;
+				el.remove();
+			}
 		}`

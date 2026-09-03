@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -104,6 +105,17 @@ func imageSum(b []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+func existingSavedImage(dir, sum string) string {
+	if dir == "" || len(sum) < 8 {
+		return ""
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*-"+sum[:8]+"*"))
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
 func saveImageBytes(dir string, b []byte, seen map[string]bool) (savedImage, bool, error) {
 	if len(b) < minGeneratedImageBytes {
 		return savedImage{}, false, nil
@@ -111,6 +123,10 @@ func saveImageBytes(dir string, b []byte, seen map[string]bool) (savedImage, boo
 	sum := imageSum(b)
 	if seen[sum] {
 		return savedImage{}, false, nil
+	}
+	if existing := existingSavedImage(dir, sum); existing != "" {
+		seen[sum] = true
+		return savedImage{Path: existing, Sum: sum}, false, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return savedImage{}, false, err
@@ -192,11 +208,58 @@ func visibleAssistantText(text string) string {
 		lines = lines[:len(lines)-1]
 	}
 	t = strings.TrimSpace(strings.Join(lines, "\n"))
+	t = stripImageGenJSON(t)
+	t = cleanImageGenFailureText(t)
 	if t == "" || isStatusChrome(t) {
 		return ""
 	}
 	if strings.HasPrefix(strings.ToLower(t), "chatgpt can make mistakes") {
 		return ""
+	}
+	return t
+}
+
+func stripImageGenJSON(text string) string {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return ""
+	}
+	if strings.Contains(t, `"transparent_background"`) || strings.Contains(t, `"is_style_transfer"`) {
+		if strings.HasPrefix(t, "{") {
+			return ""
+		}
+	}
+	return t
+}
+
+var imageWorkedForPrefix = regexp.MustCompile(`(?i)^(worked for|thought for|thinking for)\s+\d+\s*(s|sec|secs|seconds|m|min|mins|minutes)\.?\b\s*`)
+var imageWorkedForLine = regexp.MustCompile(`(?i)^(worked for|thought for|thinking for)\s+\d+\s*(s|sec|secs|seconds|m|min|mins|minutes)\.?$`)
+
+func foldQuotes(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\u2018' || r == '\u2019' {
+			return '\''
+		}
+		return r
+	}, s)
+}
+
+func cleanImageGenFailureText(s string) string {
+	t := foldQuotes(strings.TrimSpace(s))
+	if t == "" || !isImageGenFailureText(t) {
+		return t
+	}
+	t = strings.Join(strings.Fields(t), " ")
+	t = strings.TrimSpace(imageWorkedForPrefix.ReplaceAllString(t, ""))
+	low := strings.ToLower(t)
+	cut := -1
+	for _, start := range []string{"we're so sorry", "we are so sorry", "we are sorry"} {
+		if i := strings.Index(low, start); i >= 0 && (cut < 0 || i < cut) {
+			cut = i
+		}
+	}
+	if cut > 0 {
+		t = strings.TrimSpace(t[cut:])
 	}
 	return t
 }
@@ -223,6 +286,9 @@ func isStatusChrome(text string) bool {
 	t = strings.TrimPrefix(t, "chatgpt said:")
 	t = strings.TrimSpace(t)
 	t = strings.TrimRight(t, ".…")
+	if imageWorkedForLine.MatchString(t) {
+		return true
+	}
 	switch t {
 	case "", "thinking", "stopping thinking", "edit", "share", "like", "copy", "searching", "working", "analyzing",
 		"generating", "generating image", "searching the web", "chatgpt said":
@@ -236,6 +302,27 @@ func looksLikeImagePrompt(prompt string) bool {
 	p := strings.ToLower(prompt)
 	for _, k := range []string{"image", "picture", "photo", "dall-e", "dalle", "background", "transparent", "صورة", "ارسم", "رسمة", "خلفية"} {
 		if strings.Contains(p, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func imageGenFailed(status responseStatus) bool {
+	return status.ImageFailed || isImageGenFailureText(status.Tail) || isImageGenFailureText(status.StatusLine)
+}
+
+func isImageGenFailureText(s string) bool {
+	l := strings.ToLower(foldQuotes(s))
+	for _, k := range []string{
+		"guardrail", "third-party content", "violate our",
+		"we're so sorry", "we are so sorry",
+		"couldn't create", "could not create",
+		"couldn't generate", "could not generate",
+		"unable to generate", "against our policies",
+		"content policy",
+	} {
+		if strings.Contains(l, k) {
 			return true
 		}
 	}
