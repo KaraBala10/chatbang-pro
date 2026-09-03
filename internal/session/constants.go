@@ -177,12 +177,24 @@ const jsIsStreaming = `
 		}`
 
 const jsComposer = `
-		function composerButton() {
-			return document.querySelector('#composer-submit-button')
-				|| document.querySelector('button[data-testid="send-button"]')
-				|| document.querySelector('button[data-testid="stop-button"]')
-				|| document.querySelector('button[aria-label="Send prompt"]')
-				|| document.querySelector('button[aria-label="Send"]');
+		function composerCandidates() {
+			const seen = new Set();
+			const out = [];
+			const add = (el) => {
+				if (!el || seen.has(el)) return;
+				seen.add(el);
+				out.push(el);
+			};
+			add(document.querySelector('#composer-submit-button'));
+			add(document.querySelector('button[data-testid="send-button"]'));
+			add(document.querySelector('button[aria-label="Send prompt"]'));
+			add(document.querySelector('button[aria-label="Send"]'));
+			add(document.querySelector('button[data-testid="stop-button"]'));
+			for (const el of document.querySelectorAll('button[aria-label]')) {
+				const a = (el.getAttribute('aria-label') || '').toLowerCase();
+				if (a.includes('send prompt') || a === 'send') add(el);
+			}
+			return out;
 		}
 		function isStopControl(b) {
 			if (!b) return false;
@@ -192,12 +204,22 @@ const jsComposer = `
 			return a.includes('stop answering') || a.includes('stop streaming') || a.includes('stop generating');
 		}
 		function isSendableControl(b) {
-			if (!b || isStopControl(b)) return false;
+			if (!b) return false;
 			if (b.disabled || b.getAttribute('aria-disabled') === 'true') return false;
 			const t = (b.getAttribute('data-testid') || '').toLowerCase();
 			const a = (b.getAttribute('aria-label') || '').toLowerCase();
 			if (t === 'stop-button' || a.includes('stop')) return false;
 			return true;
+		}
+		function composerButton() {
+			const all = composerCandidates();
+			for (const b of all) {
+				if (isSendableControl(b)) return b;
+			}
+			for (const b of all) {
+				if (isStopControl(b)) return b;
+			}
+			return all[0] || null;
 		}
 		function composerText() {
 			const el = document.querySelector('#prompt-textarea');

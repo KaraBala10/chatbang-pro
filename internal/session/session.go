@@ -503,13 +503,9 @@ func (s *Session) ensureComposerReady() error {
 		_ = waitForSendButton(s.ctx, 5*time.Second)
 		return nil
 	}
-	if err := s.reloadConversation(); err != nil {
-		return err
-	}
-	if waitComposerSendable(s.ctx, 8*time.Second) {
-		return nil
-	}
-	return fmt.Errorf("composer not ready after reload")
+	_ = s.reloadConversation()
+	_ = waitComposerSendable(s.ctx, 8*time.Second)
+	return nil
 }
 
 func (s *Session) reloadConversation() error {
