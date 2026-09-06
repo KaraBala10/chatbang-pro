@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="docs/chatbang-pro-logo.png" alt="chatbang-pro logo" width="128" />
   <h1>chatbang-pro</h1>
   <p>
     ChatGPT in the terminal.<br />
