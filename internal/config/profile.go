@@ -14,6 +14,22 @@ import (
 
 var singletonFiles = []string{"SingletonLock", "SingletonSocket", "SingletonCookie"}
 
+// OpenProfile prepares a profile directory when no browser is using it.
+func OpenProfile(profileDir string) error {
+	abs, err := absProfile(profileDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return err
+	}
+	if leftover := pidsUsingProfile(abs); len(leftover) > 0 {
+		return fmt.Errorf("a browser is still using %s (pids %v)", abs, leftover)
+	}
+	removeSingletonFiles(abs)
+	return nil
+}
+
 // PrepareProfile frees a Chromium user-data dir so a new instance can start.
 // AppImage browsers often leave a child process behind after chromedp exits.
 func PrepareProfile(profileDir string) error {

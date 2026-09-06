@@ -873,23 +873,27 @@ func (s *Session) collectFiles(turn parsedTurn, replyText string) []savedFile {
 	if s.filesDir == "" {
 		return nil
 	}
-	deadline := time.Now().Add(15 * time.Second)
 	var files []savedFile
 	seen := map[string]bool{}
 	seenID := map[string]bool{}
 	seenSandbox := map[string]bool{}
 	loggedErr := map[string]bool{}
-	for {
-		added := s.tryCollectFiles(turn, replyText, seen, seenID, seenSandbox, loggedErr, &files)
-		if added > 0 || time.Now().After(deadline) {
+	added, pending := s.tryCollectFiles(turn, replyText, seen, seenID, seenSandbox, loggedErr, &files)
+	if added > 0 || !pending {
+		return files
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(350 * time.Millisecond)
+		added, pending = s.tryCollectFiles(turn, replyText, seen, seenID, seenSandbox, loggedErr, &files)
+		if added > 0 || !pending {
 			break
 		}
-		time.Sleep(350 * time.Millisecond)
 	}
 	return files
 }
 
-func (s *Session) tryCollectFiles(turn parsedTurn, replyText string, seen, seenID, seenSandbox, loggedErr map[string]bool, files *[]savedFile) int {
+func (s *Session) tryCollectFiles(turn parsedTurn, replyText string, seen, seenID, seenSandbox, loggedErr map[string]bool, files *[]savedFile) (int, bool) {
 	var added int
 	save := func(b []byte, name string) {
 		if isImageBytes(b) {
@@ -917,6 +921,7 @@ func (s *Session) tryCollectFiles(turn parsedTurn, replyText string, seen, seenI
 
 	sandboxPaths := uniqueStrings(append(append(turn.SandboxPaths, refs.SandboxPaths...), extractSandboxPaths(replyText)...))
 	fileIDs := uniqueStrings(append(append(turn.AssetIDs, refs.FileIDs...), extractFilePlaceholders(replyText)...))
+	pending := len(sandboxPaths) > 0 || len(fileIDs) > 0 || len(downloadURLs) > 0
 
 	for _, raw := range downloadURLs {
 		if seenSandbox[raw] {
@@ -956,7 +961,7 @@ func (s *Session) tryCollectFiles(turn parsedTurn, replyText string, seen, seenI
 		}
 		save(b, name)
 	}
-	return added
+	return added, pending && added == 0
 }
 
 func isImageBytes(b []byte) bool {

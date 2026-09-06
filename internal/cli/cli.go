@@ -4,13 +4,14 @@ import "strings"
 
 // Options holds parsed command-line flags.
 type Options struct {
-	WantConfig    bool
-	WantHelp      bool
-	Headless      bool
-	TemporaryChat bool
-	CustomGPT     string
-	Message       string
-	MessageFlag   bool
+	WantConfig     bool
+	WantHelp       bool
+	WantInstances  bool
+	Headless       bool
+	TemporaryChat  bool
+	CustomGPT      string
+	Message        string
+	MessageFlag    bool
 }
 
 func flagValue(args []string, i int) (string, int, bool) {
@@ -34,6 +35,8 @@ func Parse(args []string, headless bool) Options {
 			opts.WantConfig = true
 		case "--help", "-h":
 			opts.WantHelp = true
+		case "--instances":
+			opts.WantInstances = true
 		case "--headless":
 			opts.Headless = true
 		case "--no-headless":

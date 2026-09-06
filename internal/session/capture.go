@@ -210,6 +210,12 @@ func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline
 		}
 		printChatStatus(status, lastStatus)
 		if imageGenFailed(status) {
+			if status.Generating || status.ImageGenerating {
+				return parsedTurn{}, false
+			}
+			if text, ok := grabReplyText(ctx, status); ok {
+				return parsedTurn{Text: text}, true
+			}
 			msg := strings.TrimSpace(status.Tail)
 			if msg == "" {
 				msg = strings.TrimSpace(status.StatusLine)
@@ -238,23 +244,8 @@ func (c *conversationCapture) wait(ctx context.Context, p *pendingConv, baseline
 			}
 		}
 		if replyFinished(baseline, status) {
-			text, done, err := confirmFullResponse(ctx, replySettleWait)
-			if err == nil && done {
-				if vis := visibleAssistantText(text); vis != "" {
-					select {
-					case <-p.done:
-						streamDone = true
-					default:
-					}
-					if streamDone {
-						if turn, ok := c.readTurn(ctx, p); ok {
-							if turn.HasImage || !(status.ImageGenerating || status.ImagePending) {
-								return turn, true
-							}
-						}
-					}
-					return parsedTurn{Text: vis}, true
-				}
+			if text, ok := grabReplyText(ctx, status); ok {
+				return parsedTurn{Text: text}, true
 			}
 		}
 		return parsedTurn{}, false
@@ -342,7 +333,11 @@ func (c *conversationCapture) drainImageBytes(ctx context.Context) [][]byte {
 		if err != nil || len(raw) < minGeneratedImageBytes {
 			continue
 		}
-		out = append(out, []byte(raw))
+		b := []byte(raw)
+		if !isValidImageBytes(b) {
+			continue
+		}
+		out = append(out, b)
 	}
 	return out
 }

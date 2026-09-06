@@ -37,6 +37,16 @@ func Run(version string, args []string) {
 		return
 	}
 
+	if opts.WantInstances {
+		count, err := config.RunningInstanceCount(paths.Dir)
+		if err != nil {
+			fmt.Println("Error reading instances:", err)
+			return
+		}
+		fmt.Printf("%d chatbang-pro instance(s) running\n", count)
+		return
+	}
+
 	configFile, err := os.OpenFile(paths.File, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		fmt.Println("Error opening config file:", err)
@@ -100,7 +110,19 @@ func Run(version string, args []string) {
 
 	fmt.Fprintf(os.Stderr, "chatbang-pro %s\n", version)
 	fmt.Fprintln(os.Stderr, "Starting browser and opening ChatGPT…")
-	sess, err := session.New(defaultBrowser, profile, paths.Images, paths.Files, headless, chatTarget)
+
+	inst, err := config.AcquireChatProfile(paths.Dir, profile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer inst.Release()
+	runProfile := inst.ProfileDir()
+	if inst.Slot() > 0 {
+		fmt.Fprintf(os.Stderr, "Instance %d — using extra browser profile (slot %d)\n", inst.Slot()+1, inst.Slot())
+		fmt.Fprintf(os.Stderr, "Another chatbang-pro is already running; quit it first to reuse the main profile.\n")
+	}
+
+	sess, err := session.New(defaultBrowser, runProfile, paths.Images, paths.Files, headless, chatTarget)
 	if err != nil {
 		log.Fatal(err)
 	}

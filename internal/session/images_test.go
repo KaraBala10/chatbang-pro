@@ -140,6 +140,16 @@ func TestImageGenFailureText(t *testing.T) {
 	if !isImageGenFailureText(msg) {
 		t.Fatal("expected guardrail text")
 	}
+	temp := "I can help with that, but image generation isn't available in this temporary chat. Switch to a regular chat, then ask for a cute cat."
+	if !isImageGenFailureText(temp) {
+		t.Fatal("expected temporary chat unavailable text")
+	}
+	if shouldCollectImages(temp, parsedTurn{Text: temp}, responseStatus{}, responseStatus{}) {
+		t.Fatal("should not collect images for temp chat refusal")
+	}
+	if got := keepFullerText("You're currently in a temporary chat, where image generation isn't available. Switch to a regul", temp); got != temp {
+		t.Fatalf("keepFullerText partial = %q", got)
+	}
 	if !imageGenFailed(responseStatus{ImageFailed: true, Tail: msg}) {
 		t.Fatal("ImageFailed flag")
 	}

@@ -8,9 +8,11 @@ const (
 	pollIntervalDone       = 100 * time.Millisecond
 	stablePollsDefault     = 3
 	stablePollsLarge       = 4
-	confirmDelayDefault    = 400 * time.Millisecond
-	confirmDelayLarge      = 600 * time.Millisecond
-	replySettleWait        = 500 * time.Millisecond
+	confirmDelayDefault    = 250 * time.Millisecond
+	confirmDelayLarge      = 400 * time.Millisecond
+	replySettleWait        = 250 * time.Millisecond
+	fastReplySettleWait    = 120 * time.Millisecond
+	copyNotRequiredMinLen  = 80
 	partialMinGap          = 15 * time.Second
 	captureSeenTimeout     = 1500 * time.Millisecond
 	startWaitTimeout       = 45 * time.Second
@@ -88,7 +90,10 @@ const jsImageHelpers = `
 				"we're so sorry", "we are so sorry", "we are sorry",
 				"couldn't create", "could not create", "couldn't generate",
 				"could not generate", "unable to generate", "against our policies",
-				"content policy", "can't generate this", "cannot generate this"
+				"content policy", "can't generate this", "cannot generate this",
+				"image generation isn't available", "image generation is not available",
+				"isn't available in this temporary chat", "not available in this temporary chat",
+				"switch to a regular chat"
 			];
 			let best = "";
 			const consider = (t) => {
@@ -132,12 +137,13 @@ const jsImageHelpers = `
 		}
 		function assistantTextWithoutImageGen(node) {
 			if (!node) return "";
-			const blocked = imageGenBlockMessage(imageRoot(node) || node);
 			const clone = node.cloneNode(true);
 			for (const el of imageGenNodes(clone)) el.remove();
 			const t = (clone.textContent || "").replace(/\s+/g, " ").trim();
-			if (blocked) return t && t !== blocked ? (t + "\n\n" + blocked) : blocked;
-			return clone.textContent || "";
+			const blocked = imageGenBlockMessage(imageRoot(node) || node);
+			if (!blocked) return t;
+			if (t.length >= blocked.length) return t;
+			return blocked;
 		}
 		function imageSrcs(root) {
 			if (!root) return [];

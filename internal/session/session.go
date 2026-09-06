@@ -39,11 +39,12 @@ type Session struct {
 	knownChats  map[string]bool
 	convURL     string
 	capture     *conversationCapture
+	stopOnce    sync.Once
 }
 
 // New opens a browser session and waits until the chat page is ready.
 func New(browser, profileDir, imagesDir, filesDir string, headless bool, chatTarget string) (*Session, error) {
-	if err := config.PrepareProfile(profileDir); err != nil {
+	if err := config.OpenProfile(profileDir); err != nil {
 		return nil, err
 	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(
@@ -52,7 +53,7 @@ func New(browser, profileDir, imagesDir, filesDir string, headless bool, chatTar
 	)
 	s := &Session{allocCtx: allocCtx, allocCancel: allocCancel, chatURL: chatTarget, profileDir: profileDir, imagesDir: imagesDir, filesDir: filesDir, knownChats: map[string]bool{}}
 	if err := s.openTab(); err != nil {
-		stopBrowser(s.ctx, s.ctxCancel, allocCancel, profileDir)
+		s.Close()
 		return nil, err
 	}
 	return s, nil
@@ -60,9 +61,12 @@ func New(browser, profileDir, imagesDir, filesDir string, headless bool, chatTar
 
 // Close shuts down the browser session.
 func (s *Session) Close() {
-	stopBrowser(s.ctx, s.ctxCancel, s.allocCancel, s.profileDir)
-	s.ctxCancel = nil
-	s.allocCancel = nil
+	s.stopOnce.Do(func() {
+		stopBrowser(s.ctx, s.ctxCancel, s.allocCancel, s.profileDir)
+		s.ctx = nil
+		s.ctxCancel = nil
+		s.allocCancel = nil
+	})
 }
 
 // RunTurn sends one prompt and prints the assistant reply to stdout.
@@ -139,25 +143,25 @@ func (s *Session) runTurn(prompt string) ([]byte, int, error) {
 		}
 		return out, max(peak, len(text), 1), errStopped
 	}
-	if !isImageGenFailureText(text) {
+	after, _ := readResponseStatus(s.ctx, baseline)
+	if needsCopyMerge(text, after) {
 		if copied := copyAssistantReply(s.ctx); copied != "" {
 			text = keepFullerText(text, copied)
 		}
 	}
-	after, _ := readResponseStatus(s.ctx, baseline)
 	if imageGenFailed(after) {
 		if vis := visibleAssistantText(text); vis != "" {
 			text = vis
 		} else if tail := visibleAssistantText(after.Tail); tail != "" {
-			text = tail
+			text = keepFullerText(text, tail)
+		}
+		if copied := copyAssistantReply(s.ctx); copied != "" {
+			text = keepFullerText(text, copied)
 		}
 	}
-	thisImage := !imageGenFailed(after) && (looksLikeImagePrompt(prompt) || newImageThisTurn(baseline, after))
 	var images []savedImage
-	if thisImage {
-		pt := turn
-		pt.HasImage = true
-		images = s.collectImages(pt)
+	if shouldCollectImages(text, turn, baseline, after) {
+		images = s.collectImages(turn)
 	}
 	if link := s.conversationURL(); link != "" {
 		s.convURL = link
@@ -215,7 +219,7 @@ func (s *Session) submitAndCapture(prompt string, baseline responseStatus, stop 
 }
 
 func (s *Session) collectImages(turn parsedTurn) []savedImage {
-	if s.imagesDir == "" {
+	if s.imagesDir == "" || isImageGenFailureText(turn.Text) {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -241,7 +245,7 @@ func (s *Session) collectImages(turn parsedTurn) []savedImage {
 		sawGen = s.capture.sawImageGen()
 	}
 
-	want := turn.HasImage || sawGen || len(images) > 0
+	want := turn.HasImage || len(images) > 0 || (sawGen && !isImageGenFailureText(turn.Text))
 	if !want {
 		return images
 	}
@@ -283,7 +287,7 @@ func (s *Session) collectImages(turn parsedTurn) []savedImage {
 					b = fetchURLViaPage(s.ctx, u)
 				}
 			}
-			if len(b) > 0 {
+			if len(b) > 0 && isValidImageBytes(b) {
 				save(b)
 				if len(images) > 0 {
 					return
@@ -299,7 +303,7 @@ func (s *Session) collectImages(turn parsedTurn) []savedImage {
 			if err != nil || len(b) == 0 {
 				b = fetchURLViaPage(s.ctx, u)
 			}
-			if len(b) > 0 {
+			if len(b) > 0 && isValidImageBytes(b) {
 				save(b)
 			}
 		}
@@ -383,7 +387,9 @@ func waitEnter() {
 
 func (s *Session) openTab() error {
 	if s.ctxCancel != nil {
-		s.ctxCancel()
+		cancel := s.ctxCancel
+		s.ctxCancel = nil
+		cancel()
 	}
 	s.ctx, s.ctxCancel = chromedp.NewContext(s.allocCtx, chromedp.WithErrorf(suppressChromedpNoise))
 	s.capture = listenConversation(s.ctx)

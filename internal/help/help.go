@@ -33,6 +33,7 @@ Type a prompt at `+"`> `"+`, wait for `+"`[Thinking...]`"+`, then read the reply
 | `+"`--temporary-chat`"+`, `+"`--temp`"+` | Use [temporary chat](%s) (works with `+"`--gpt`"+` too) |
 | `+"`--gpt`"+`, `+"`--custom-gpt`"+`, `+"`-g`"+` | Chat with a [custom GPT](https://chatgpt.com/gpts) (full URL, `+"`/g/g-...`"+` path, or `+"`g-...`"+` id) |
 | `+"`--message`"+`, `+"`-m`"+` | Send one prompt, print the reply, and exit (non-interactive) |
+| `+"`--instances`"+` | Print how many chatbang-pro instances are currently running |
 
 ## First-time setup
 
@@ -71,10 +72,12 @@ chatbang-pro -g g-81BdggBV3-website-mobile-app-builder-ui-ux-web-design
 chatbang-pro --gpt https://chatgpt.com/g/g-xxx --message "كيفك"
 chatbang-pro -m "What is 2+2?"
 chatbang-pro --config                 # import session from another browser, or log in
+chatbang-pro --instances              # how many instances are running
 `+"```"+`
 
 ## Tips
 
+- You can run several chatbang-pro sessions at once; each extra session gets its own browser profile slot.
 - Ctrl+C while a reply is generating stops ChatGPT and prints the partial reply.
 `, chaturl.TempURL, configPath)
 	fmt.Println(string(markdown.Render(helpMarkdown, 100, 2)))

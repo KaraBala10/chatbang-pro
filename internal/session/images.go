@@ -116,8 +116,12 @@ func existingSavedImage(dir, sum string) string {
 	return matches[0]
 }
 
+func isValidImageBytes(b []byte) bool {
+	return imageExt(b) != ".img"
+}
+
 func saveImageBytes(dir string, b []byte, seen map[string]bool) (savedImage, bool, error) {
-	if len(b) < minGeneratedImageBytes {
+	if len(b) < minGeneratedImageBytes || !isValidImageBytes(b) {
 		return savedImage{}, false, nil
 	}
 	sum := imageSum(b)
@@ -210,6 +214,17 @@ func keepFullerText(primary, copied string) string {
 	default:
 		return a
 	}
+}
+
+func needsCopyMerge(text string, after responseStatus) bool {
+	text = visibleAssistantText(text)
+	if text == "" {
+		return true
+	}
+	if imageGenFailed(after) || isImageGenFailureText(text) {
+		return true
+	}
+	return len(text) < copyNotRequiredMinLen
 }
 
 func visibleAssistantText(text string) string {
@@ -338,12 +353,25 @@ func isImageGenFailureText(s string) bool {
 		"couldn't generate", "could not generate",
 		"unable to generate", "against our policies",
 		"content policy",
+		"image generation isn't available", "image generation is not available",
+		"isn't available in this temporary chat", "not available in this temporary chat",
+		"switch to a regular chat",
 	} {
 		if strings.Contains(l, k) {
 			return true
 		}
 	}
 	return false
+}
+
+func shouldCollectImages(text string, turn parsedTurn, baseline, after responseStatus) bool {
+	if imageGenFailed(after) || isImageGenFailureText(text) || isImageGenFailureText(turn.Text) {
+		return false
+	}
+	return turn.HasImage ||
+		newImageThisTurn(baseline, after) ||
+		after.HasImage ||
+		after.ImageCount > baseline.ImageCount
 }
 
 func nudgeImageGeneration(ctx context.Context) {

@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResponseStartedIgnoresBaselineImage(t *testing.T) {
 	base := responseStatus{HasImage: true, ImageCount: 1, NodeCount: 1, Len: 10, Tail: "old"}
@@ -100,6 +103,10 @@ func TestReplyFinishedIgnoresThinkingChrome(t *testing.T) {
 	heading.CopyReady = true
 	if !replyFinished(base, heading) {
 		t.Fatal("heading with Copy should be finished")
+	}
+	long := responseStatus{NodeCount: 2, UserCount: 2, Len: 120, Tail: strings.Repeat("a", 120)}
+	if !replyFinished(base, long) {
+		t.Fatal("long reply without Copy should be finished once streaming stops")
 	}
 	if replyFinished(base, responseStatus{Generating: true, NodeCount: 1, UserCount: 1, Len: 5, Tail: "Hel"}) {
 		t.Fatal("still generating is not finished")

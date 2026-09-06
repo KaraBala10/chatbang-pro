@@ -4,6 +4,47 @@ All notable changes to Chatbang Pro are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] - 2026-09-06
+
+**Chatbang Pro — multiple sessions, faster replies, and temporary-chat fixes**
+
+### Added
+
+- **Multiple instances** — run several `chatbang-pro` sessions at once; extra sessions get their own browser profile slot (up to 8)
+- **`--instances` flag** — prints how many chatbang-pro processes are currently running
+
+### Changed
+
+- Extra instance profiles live beside the main profile (e.g. `~/chatbang/instances/1/`) so Snap Chromium can write them
+- Replies print as soon as Copy succeeds or the DOM text is stable; no 15s wait when there are no file attachments
+- Copy merge runs only for short replies or image-unavailable messages
+
+### Fixed
+
+- Temporary-chat image prompts returning truncated text (e.g. cut off at "in this temporar")
+- Bogus `.img` files saved when image generation was blocked or unavailable
+- `close of closed channel` panic when starting a second instance
+- Snap Chromium `Permission denied` on instance profiles under `~/.config/chatbang/instances/`
+- Reply loop that kept waiting after the browser already showed the full message
+
+### Install (Linux amd64)
+
+```bash
+curl -L https://github.com/KaraBala10/chatbang-pro/releases/download/v1.5.0/chatbang-pro.tar.gz | tar -xz
+chmod +x chatbang-pro
+mkdir -p ~/.local/bin
+mv chatbang-pro ~/.local/bin/chatbang-pro
+chatbang-pro --config
+```
+
+### Examples
+
+```bash
+chatbang-pro --no-headless
+chatbang-pro --instances
+chatbang-pro --temporary-chat -m "generate an image for a cute cat"
+```
+
 ## [1.4.0] - 2026-09-03
 
 **Chatbang Pro — code-interpreter file downloads, cleaner replies, and sturdier Ctrl+C**

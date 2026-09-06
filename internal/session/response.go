@@ -37,6 +37,13 @@ func completionThresholds(contentLen int) (stableNeeded int, confirmWait time.Du
 	return stablePollsDefault, confirmDelayDefault
 }
 
+func replyConfirmWait(status responseStatus, fallback time.Duration) time.Duration {
+	if status.CopyReady || (status.Len >= copyNotRequiredMinLen && !status.Generating && !status.ImageGenerating && !status.ImagePending) {
+		return fastReplySettleWait
+	}
+	return fallback
+}
+
 func evaluateResponseStatus(ctx context.Context) (responseStatus, error) {
 	statusJS := `(() => {
 		` + jsIsStreaming + `
@@ -50,10 +57,6 @@ func evaluateResponseStatus(ctx context.Context) (responseStatus, error) {
 		const streamingNode = document.querySelector('[data-is-streaming="true"]');
 		if (!nodes.length) {
 			const pendingRoot = document.body;
-			const blockedMsg = imageGenBlockMessage(pendingRoot);
-			if (blockedMsg) {
-				return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, lastImage: "", statusLine: "", nodeCount: 0, userCount: userCount, imageCount: 0, len: Math.max(blockedMsg.length, 1), tail: blockedMsg};
-			}
 			const pending = isImageGenPending(pendingRoot);
 			const line = pending ? (imageGenStatusLine(pendingRoot) || "Generating image...") : "";
 			return {generating: stop || pending, imageGenerating: pending, imagePending: pending, lastImage: "", statusLine: line, nodeCount: 0, userCount: userCount, imageCount: 0};
@@ -76,14 +79,16 @@ func evaluateResponseStatus(ctx context.Context) (responseStatus, error) {
 		const chrome = !blockedMsg && isReplyChrome(rawTc);
 		const tc = chrome ? "" : rawTc;
 		const len = tc.length;
-		if (blockedMsg) {
-			return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, copyReady: copyReady, lastImage: lastImage, statusLine: "", imageCount: 0, len: Math.max(blockedMsg.length, 1), tail: blockedMsg, nodeCount: nodes.length, userCount: userCount};
+		const replyComplete = !streaming && !stop && !thinking && copyReady && len > 0;
+		if (blockedMsg && replyComplete) {
+			const tail = tc.length >= blockedMsg.length ? tc : blockedMsg;
+			return {generating: false, hasImage: false, imageGenerating: false, imagePending: false, imageFailed: true, copyReady: copyReady, lastImage: lastImage, statusLine: "", imageCount: 0, len: Math.max(tail.length, 1), tail: tail, nodeCount: nodes.length, userCount: userCount};
 		}
 		if (finished && !pending) {
 			return {generating: false, hasImage: true, imageGenerating: false, imagePending: false, copyReady: copyReady, lastImage: lastImage, statusLine: "", imageCount: Math.max(imgs.length, 1), len: Math.max(len, 1), tail: tc.substring(Math.max(0, len - 400)), nodeCount: nodes.length, userCount: userCount};
 		}
 		const awaitingCopy = len > 0 && !copyReady && !hasImage;
-		const stillWriting = streaming || imagePending || waitingOnImageFollowUp || chrome || stop || thinking || awaitingCopy;
+		const stillWriting = streaming || imagePending || waitingOnImageFollowUp || chrome || stop || thinking || awaitingCopy || (blockedMsg && !replyComplete);
 		if (stillWriting || pending || (stop && !len && !hasImage)) {
 			return {generating: true, hasImage: hasImage, imageGenerating: pending, imagePending: imagePending, copyReady: copyReady, lastImage: lastImage, statusLine: statusLine || (chrome || thinking ? "Thinking..." : ""), imageCount: imgs.length, nodeCount: nodes.length, userCount: userCount};
 		}
@@ -159,6 +164,12 @@ func confirmFullResponse(ctx context.Context, confirmWait time.Duration) (string
 	if err != nil {
 		return "", false, err
 	}
+	if confirmWait <= 0 {
+		if strings.TrimSpace(first) == "" {
+			return first, false, nil
+		}
+		return first, true, nil
+	}
 	if err := chromedp.Run(ctx, chromedp.Sleep(confirmWait)); err != nil {
 		return first, true, nil
 	}
@@ -173,6 +184,28 @@ func confirmFullResponse(ctx context.Context, confirmWait time.Duration) (string
 		return second, false, nil
 	}
 	return second, true, nil
+}
+
+func grabReplyText(ctx context.Context, status responseStatus) (string, bool) {
+	if status.CopyReady {
+		if copied := copyAssistantReply(ctx); copied != "" {
+			if vis := visibleAssistantText(copied); vis != "" {
+				return vis, true
+			}
+		}
+	}
+	wait := replyConfirmWait(status, replySettleWait)
+	if status.CopyReady {
+		wait = 0
+	}
+	text, done, err := confirmFullResponse(ctx, wait)
+	if err != nil || !done {
+		return "", false
+	}
+	if vis := visibleAssistantText(text); vis != "" {
+		return vis, true
+	}
+	return "", false
 }
 
 func maybeSavePartial(ctx context.Context, statusLen int, lastPartial *string, lastFetch *time.Time) {
@@ -254,7 +287,13 @@ func waitingForCopy(status responseStatus) bool {
 	if imageGenFailed(status) || status.HasImage || status.ImageCount > 0 {
 		return false
 	}
-	return !status.CopyReady
+	if status.CopyReady {
+		return false
+	}
+	if status.Len >= copyNotRequiredMinLen && !status.Generating && !status.ImageGenerating && !status.ImagePending {
+		return false
+	}
+	return true
 }
 
 func streamCaptureReady(status responseStatus) bool {
@@ -298,11 +337,11 @@ func responseAlreadyComplete(baseline, status responseStatus, expectImage bool) 
 
 func grabFinishedReply(ctx context.Context, baseline, status responseStatus, imageMode bool) ([]byte, int, bool, error) {
 	if imageGenFailed(status) {
-		msg := visibleAssistantText(status.Tail)
-		if msg == "" {
-			text, _, _ := confirmFullResponse(ctx, 0)
-			msg = visibleAssistantText(text)
+		if text, ok := grabReplyText(ctx, status); ok {
+			out, err := renderResponse(text)
+			return out, max(len(text), 1), true, err
 		}
+		msg := visibleAssistantText(status.Tail)
 		if msg == "" {
 			msg = visibleAssistantText(status.StatusLine)
 		}
@@ -317,19 +356,12 @@ func grabFinishedReply(ctx context.Context, baseline, status responseStatus, ima
 	if !replyFinished(baseline, status) {
 		return nil, 0, false, nil
 	}
-	text, done, err := confirmFullResponse(ctx, replySettleWait)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	if !done {
-		return nil, 0, false, nil
-	}
-	if vis := visibleAssistantText(text); vis != "" {
-		if imageMode && !newImageThisTurn(baseline, status) && !status.HasImage && !imageGenFailed(status) && !isImageGenFailureText(vis) {
+	if text, ok := grabReplyText(ctx, status); ok {
+		if imageMode && !newImageThisTurn(baseline, status) && !status.HasImage && !imageGenFailed(status) && !isImageGenFailureText(text) {
 			return nil, 0, false, nil
 		}
-		out, err := renderResponse(vis)
-		return out, max(len(vis), 1), true, err
+		out, err := renderResponse(text)
+		return out, max(len(text), 1), true, err
 	}
 	if imageMode && newImageThisTurn(baseline, status) {
 		return []byte(""), max(status.Len, 1), true, nil
@@ -464,7 +496,7 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 		if out, n, ok, err := grabFinishedReply(ctx, baseline, status, imageMode); ok {
 			return out, n, err
 		}
-		if replyFinished(baseline, status) && !imageMode {
+		if replyFinished(baseline, status) && !imageMode && !started {
 			stableCount = 0
 			if waitOrStop(pollIntervalActive, stop) {
 				return returnStopped()
@@ -506,6 +538,10 @@ func waitForResponse(ctx context.Context, expectImage bool, baseline responseSta
 				continue
 			}
 			stableNeeded, confirmWait := completionThresholds(peakLen)
+			if status.CopyReady {
+				stableNeeded = min(stableNeeded, 2)
+			}
+			confirmWait = replyConfirmWait(status, confirmWait)
 			sig := status.signature()
 			if imageMode {
 				sig = fmt.Sprintf("%s:%d:%d", sig, status.ImageCount, status.NodeCount)

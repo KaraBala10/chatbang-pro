@@ -70,6 +70,12 @@ func TestParse(t *testing.T) {
 			want: Options{Headless: true, MessageFlag: true, Message: "hello"},
 		},
 		{
+			name: "instances flag",
+			args: []string{"chatbang-pro", "--instances"},
+			base: true,
+			want: Options{Headless: true, WantInstances: true},
+		},
+		{
 			name: "combined flags",
 			args: []string{"chatbang-pro", "--temp", "-g", "g-abc123", "-m", "hi"},
 			base: true,
