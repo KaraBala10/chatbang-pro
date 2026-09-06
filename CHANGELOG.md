@@ -29,6 +29,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Install (Linux amd64)
 
+**Chromium (or another Chromium-based browser)**
+
+```bash
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y chromium-browser
+# or: sudo snap install chromium
+
+# Fedora
+sudo dnf install -y chromium
+
+# Arch
+sudo pacman -S chromium
+```
+
+**chatbang-pro**
+
 ```bash
 curl -L https://github.com/KaraBala10/chatbang-pro/releases/download/v1.5.0/chatbang-pro.tar.gz | tar -xz
 chmod +x chatbang-pro

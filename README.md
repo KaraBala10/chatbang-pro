@@ -51,7 +51,49 @@ Download a ready binary from the latest GitHub Release. You do not need Go, and 
 
 **[Latest release](https://github.com/KaraBala10/chatbang-pro/releases/latest)**
 
-On that page, under **Assets**, download `chatbang-pro.tar.gz`. You need a Chromium-based browser (Google Chrome, Chromium, Edge, Brave, and similar) and a ChatGPT login.
+On that page, under **Assets**, download `chatbang-pro.tar.gz`.
+
+### 1. Install a Chromium-based browser
+
+Chatbang Pro drives a local **Chromium-based** browser (Chromium, Google Chrome, Edge, Brave, Vivaldi, …). Install one if you do not have it yet:
+
+**Ubuntu / Debian (apt)**
+
+```bash
+sudo apt update
+sudo apt install -y chromium-browser
+# or Google Chrome from https://www.google.com/chrome/
+```
+
+**Ubuntu (Snap — common on fresh installs)**
+
+```bash
+sudo snap install chromium
+```
+
+Snap Chromium cannot write under hidden paths such as `~/.config/...`. Chatbang uses `~/chatbang/profile_data` automatically when it detects Snap.
+
+**Fedora**
+
+```bash
+sudo dnf install -y chromium
+```
+
+**Arch Linux**
+
+```bash
+sudo pacman -S chromium
+```
+
+Check that a browser is found:
+
+```bash
+command -v chromium-browser || command -v chromium || command -v google-chrome-stable
+```
+
+If it lives outside `/usr/bin`, set `browser=/full/path` in `~/.config/chatbang/chatbang`.
+
+### 2. Install chatbang-pro
 
 ```bash
 curl -fL https://github.com/KaraBala10/chatbang-pro/releases/latest/download/chatbang-pro.tar.gz | tar -xz
@@ -65,6 +107,8 @@ Make sure `~/.local/bin` is on your `PATH`. Then run setup once:
 ```bash
 chatbang-pro --config
 ```
+
+You need a ChatGPT login in that browser profile (import from another browser or sign in during `--config`).
 
 ## Setup
 
@@ -112,6 +156,7 @@ Type a prompt at `>`. Empty lines are ignored. While a reply is generating, **Ct
 | `--temporary-chat`, `--temp` | Temporary chat ([chatgpt.com/?temporary-chat=true](https://chatgpt.com/?temporary-chat=true)); works with `--gpt` |
 | `--gpt`, `--custom-gpt`, `-g` | Custom GPT: full URL, `/g/g-...` path, or `g-...` id |
 | `--message`, `-m` | Send one prompt, print the reply, and exit |
+| `--instances` | Print how many chatbang-pro instances are currently running |
 
 ## Output
 
